@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      启动主题：只负责「Compose 画出第一帧之前」的那段时间。
+      系统会先铺 windowBackground，Android 12+ 的启动画面在没有指定
+      windowSplashScreenBackground 时也用它做背景。
+
+      原来只有一个 android:Theme.Material.Light.NoActionBar、也没有 values-night，
+      深色模式下启动就先铺一层浅灰，等 Compose 起来才变黑 —— 也就是"先白屏一下"。
+      现在窗口底色用 @color/window_background（values-night 里是纯黑，
+      和 Compose 的 DarkBackground 完全一致）。
+    -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <!-- 以下三项只在 Android 12+ 生效，低版本自动忽略 -->
+        <item name="android:windowSplashScreenBackground">@color/window_background</item>
+        <!--
+          开屏不要图标：这个属性的默认值是应用图标（而且不会被套上自适应遮罩，
+          直接就是一块直角方块），显式给一个透明色把它顶掉，
+          启动画面就只剩一块和首帧同色的底。
+        -->
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/window_background</item>
+    </style>
 </resources>

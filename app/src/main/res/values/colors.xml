@@ -7,4 +7,12 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!--
+      窗口底色：冷启动第一帧和 Android 12+ 启动画面的背景都用它。
+      它比 Compose 第一帧更早画出来，所以必须和 Compose 的
+      LightBackground / DarkBackground 对齐 —— 不一致就会先闪一下另一种颜色。
+      values-night 里是同名的纯黑。
+    -->
+    <color name="window_background">#FFF1F2F4</color>
 </resources>
