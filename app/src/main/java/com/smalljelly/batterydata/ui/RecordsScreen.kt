@@ -874,7 +874,9 @@ private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
 private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
     val colors = MiuixTheme.colorScheme
     Column(
-        modifier = modifier,
+        // 必须撑满：Column 默认宽度只有内容宽（300dp 的按钮），躺在列表左边缘，
+        // 里面的 horizontalAlignment 就没有可居中的余量，整块会贴着左边。
+        modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
