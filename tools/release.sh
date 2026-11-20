@@ -20,11 +20,11 @@ echo "==> 版本 ${VERSION} (${CODE})"
 sed -i "s/versionName = \"[^\"]*\"/versionName = \"${VERSION}\"/" app/build.gradle.kts
 sed -i "s/versionCode = [0-9]\+/versionCode = ${CODE}/" app/build.gradle.kts
 
-echo "==> 编译"
-./gradlew :app:assembleDebug
+echo "==> 编译（release 变体，用 keystore.properties 里的密钥签名）"
+./gradlew :app:assembleRelease
 
 mkdir -p build/release
-cp app/build/outputs/apk/debug/app-debug.apk "${OUT}"
+cp app/build/outputs/apk/release/app-release.apk "${OUT}"
 echo "==> 安装包 ${OUT} ($(du -h "${OUT}" | cut -f1))"
 
 echo "==> 提交"

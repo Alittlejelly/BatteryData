@@ -47,11 +47,20 @@ https://api.github.com/repos/Alittlejelly/BatteryData/releases/latest
 tools/release.sh 1.0.2 102 "修复 xxx"
 ```
 
-脚本会改 `versionName` / `versionCode`、编译 debug 包、打 tag、推 main、用 `gh` 创建 Release 并上传 APK。
+脚本会改 `versionName` / `versionCode`、编译 **release** 变体、打 tag、推 main、用 `gh` 创建 Release 并上传 APK。
 装过旧版本的机器下一次点「检查更新」就能直接下到这一版。
 
-> 注：Release 里的安装包用本机 debug 签名，和直接安装 `app-debug.apk` 的签名一致，
-> 因此可以覆盖安装。若要用正式签名，在 `app/build.gradle.kts` 里加 `signingConfigs` 并自行保管密钥。
+签名读取根目录的 `keystore.properties`（已在 `.gitignore` 里，不入库）：
+
+```properties
+storeFile=keysign/batterydata
+storePassword=******
+keyAlias=baterrydata
+keyPassword=******
+```
+
+没有这个文件时 `assembleRelease` 会退回 debug 签名，方便他人 clone 后直接编译；
+但**这种包和正式签名的包不能互相覆盖安装**，发布时必须用带密钥的环境。
 
 ## 桌面小部件接口（只读）
 
