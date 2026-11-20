@@ -1,0 +1,40 @@
+package com.smalljelly.batterydata.data
+
+import android.content.Context
+
+/**
+ * 用户手动设置（SharedPreferences 持久化）。
+ */
+class BatterySettings(context: Context) {
+
+    private val prefs = context.applicationContext
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /** 手动指定的设计容量，未设置时返回 null。 */
+    fun manualDesignCapacityMah(): Float? =
+        prefs.getFloat(KEY_MANUAL_DESIGN_MAH, 0f).takeIf { it > 0f }
+
+    /** 设置 / 清除（传 null 恢复自动识别）。 */
+    fun setManualDesignCapacityMah(mah: Float?) {
+        prefs.edit().apply {
+            if (mah == null) {
+                remove(KEY_MANUAL_DESIGN_MAH)
+            } else {
+                putFloat(KEY_MANUAL_DESIGN_MAH, mah)
+            }
+        }.apply()
+    }
+
+    /** 顶栏模糊自检：不过滤、不淡出，直接贴内容副本（排查"看不见模糊"用） */
+    fun topBlurSelfTest(): Boolean = prefs.getBoolean(KEY_TOP_BLUR_SELF_TEST, false)
+
+    fun setTopBlurSelfTest(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TOP_BLUR_SELF_TEST, enabled).apply()
+    }
+
+    private companion object {
+        const val PREFS_NAME = "battery_settings"
+        const val KEY_MANUAL_DESIGN_MAH = "manual_design_capacity_mah"
+        const val KEY_TOP_BLUR_SELF_TEST = "top_blur_self_test"
+    }
+}

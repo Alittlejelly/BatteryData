@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 记录一次完整充电需要长时间后台采样，用前台服务挂着，通知栏常驻 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 应用内更新：下载完 APK 后拉起系统安装器。Android 8 起还需要用户在
+         「安装未知应用」里给本应用授权，没授权时安装会被系统拦下。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyApplication">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MyApplication"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".data.ChargeRecordService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="battery_charge_telemetry" />
+        </service>
+
+        <!--
+          给小米小部件（主题格式）读数据的只读接口。
+          exported 必须为 true：小部件跑在桌面/主题引擎进程里，是另一个 uid。
+          不设 permission：桌面组件的 ContentProviderBinder 不会带我们的自定义权限，
+          设了权限小部件就永远查不到数据。里面只有电池读数和充电统计，没有隐私内容。
+        -->
+        <provider
+            android:name=".provider.BatteryWidgetProvider"
+            android:authorities="${applicationId}.widget"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
+        <!-- 把 cache/apk/ 下的安装包暴露成 content:// 给系统安装器（见 ApkUpdater） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

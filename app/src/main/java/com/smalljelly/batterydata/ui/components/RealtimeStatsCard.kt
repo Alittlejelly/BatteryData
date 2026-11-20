@@ -1,0 +1,128 @@
+package com.smalljelly.batterydata.ui.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.smalljelly.batterydata.data.BatterySample
+import com.smalljelly.batterydata.ui.theme.BatteryGreen
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.util.Locale
+import kotlin.math.abs
+
+/**
+ * 实时电压 / 电流 / 功率 / 温度。
+ */
+@Composable
+fun RealtimeStatsCard(
+    sample: BatterySample,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MiuixTheme.colorScheme
+    val current = sample.currentMa
+    val currentColor = if (current != null && current > 0f) BatteryGreen else colors.onSurfaceContainer
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        cornerRadius = 20.dp,
+        insideMargin = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "实时数据",
+                style = MiuixTheme.textStyles.title3,
+                color = colors.onSurfaceContainer,
+            )
+            LiveBadge(text = "每 10 秒刷新")
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            StatCell(
+                label = "电压",
+                value = sample.voltageMv.takeIf { it > 0 }
+                    ?.let { String.format(Locale.US, "%.2f", it / 1000f) } ?: "—",
+                unit = "V",
+            )
+            StatCell(
+                label = "电流",
+                value = current?.let { String.format(Locale.US, "%.0f", abs(it)) } ?: "—",
+                unit = "mA",
+                valueColor = currentColor,
+                caption = current?.let { if (it > 0) "充电" else "放电" },
+            )
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            StatCell(
+                label = "功率",
+                value = sample.powerW?.let { String.format(Locale.US, "%.2f", abs(it)) } ?: "—",
+                unit = "W",
+            )
+            StatCell(
+                label = "温度",
+                value = sample.temperatureC?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
+                unit = "°C",
+            )
+        }
+    }
+}
+
+@Composable
+private fun RowScope.StatCell(
+    label: String,
+    value: String,
+    unit: String,
+    valueColor: androidx.compose.ui.graphics.Color = MiuixTheme.colorScheme.onSurfaceContainer,
+    caption: String? = null,
+) {
+    val secondary = MiuixTheme.colorScheme.onSurfaceVariantSummary
+    Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text = label, fontSize = 13.sp, color = secondary)
+            if (caption != null) {
+                Text(
+                    text = "($caption)",
+                    fontSize = 11.sp,
+                    color = secondary.copy(alpha = 0.7f),
+                )
+            }
+        }
+        Spacer(Modifier.height(5.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = value,
+                fontSize = 25.sp,
+                lineHeight = 27.sp,
+                fontWeight = FontWeight.Medium,
+                color = valueColor,
+            )
+            Text(
+                text = unit,
+                fontSize = 12.sp,
+                color = secondary,
+                modifier = Modifier.padding(start = 3.dp, bottom = 3.dp),
+            )
+        }
+    }
+}

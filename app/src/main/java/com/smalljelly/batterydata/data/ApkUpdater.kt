@@ -1,0 +1,118 @@
+package com.smalljelly.batterydata.data
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.coroutines.coroutineContext
+
+/**
+ * 从 GitHub Release 下载 APK 并拉起系统安装器。
+ *
+ * 文件落 `cache/apk/`，用 FileProvider 暴露成 content:// 给安装器 ——
+ * Android 7 以后直接把 file:// 丢给 Intent 会抛 FileUriExposedException。
+ *
+ * 安装失败最常见的原因不是代码，而是「未知来源」没开（Android 8 起按应用授权），
+ * 所以 [install] 返回失败时调用方应该引导用户去 [installSettingsIntent]。
+ */
+object ApkUpdater {
+
+    private const val TIMEOUT_MS = 20_000
+    private const val BUFFER = 64 * 1024
+
+    /** 下载目标路径：版本号进文件名，换版本重新下，不会命中上一次的残留 */
+    fun apkFile(context: Context, version: String): File {
+        val dir = File(context.cacheDir, "apk").apply { mkdirs() }
+        return File(dir, "BatteryData-${version.ifBlank { "latest" }}.apk")
+    }
+
+    /**
+     * 下载到 [apkFile]。已有同版本完整文件时直接复用。
+     * [onProgress] 在 IO 线程被调用（百分比与已下字节），total 未知时传 -1。
+     */
+    suspend fun download(
+        context: Context,
+        url: String,
+        version: String,
+        onProgress: (percent: Int, downloaded: Long, total: Long) -> Unit,
+    ): File = withContext(Dispatchers.IO) {
+        val target = apkFile(context, version)
+        val partial = File(target.path + ".part")
+
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = TIMEOUT_MS
+            readTimeout = TIMEOUT_MS
+            // GitHub 的下载地址会 302 到 objects.githubusercontent.com
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "BatteryData-Android")
+        }
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) throw IllegalStateException("下载失败：HTTP $code")
+            val total = connection.contentLengthLong
+            connection.inputStream.use { input ->
+                partial.outputStream().use { output ->
+                    val buffer = ByteArray(BUFFER)
+                    var downloaded = 0L
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        val percent = if (total > 0) (downloaded * 100 / total).toInt() else -1
+                        onProgress(percent, downloaded, total)
+                    }
+                    output.flush()
+                }
+            }
+            if (target.exists()) target.delete()
+            if (!partial.renameTo(target)) throw IllegalStateException("写入安装包失败")
+            target
+        } finally {
+            runCatching { connection.disconnect() }
+            runCatching { if (partial.exists()) partial.delete() }
+        }
+    }
+
+    /** 清掉上次残留的安装包（升级完成后调用，cache 目录别越攒越大） */
+    fun clean(context: Context) {
+        runCatching {
+            File(context.cacheDir, "apk").listFiles()?.forEach { it.delete() }
+        }
+    }
+
+    /** 是否已被允许「安装未知应用」（Android 8+）。false 时安装会静默失败 */
+    fun canInstall(context: Context): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(true)
+        } else {
+            true
+        }
+
+    /** 跳「安装未知应用」授权页 */
+    fun installSettingsIntent(context: Context): Intent =
+        Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    /** 拉起系统安装器；返回 false 表示没有安装器/URI 授权失败 */
+    fun install(context: Context, apk: File): Boolean = runCatching {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        true
+    }.getOrDefault(false)
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 路径：只暴露 cache/apk/，安装器拿到的是 content:// URI。
+  别把整块 cache 或 files 目录暴露出去，没必要。
+-->
+<paths>
+    <cache-path
+        name="apk"
+        path="apk/" />
+</paths>
