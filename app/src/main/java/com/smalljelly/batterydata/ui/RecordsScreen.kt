@@ -441,13 +441,6 @@ fun RecordsScreen(
                             }
                         }
 
-                        // 真正的空态：一条记录都没有、也没在记录
-                        if (records.isEmpty() && !busy) {
-                            item(key = "empty") {
-                                EmptyRecords(onStart = { startRecording() })
-                            }
-                        }
-
                         itemsIndexed(records, key = { _, item -> item.id }) { index, record ->
                             // 新记录：高度 0 → 满高 + 淡入，下面的卡片就是被"顶"下去的。
                             // 只有记录页真正在前台时才播，否则会在这个"看不见但已组合"的页面里
@@ -488,6 +481,22 @@ fun RecordsScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                // 空态：不放 LazyColumn 条目里 —— 条目的高度就是内容高度，摆出来天然贴顶，
+                // 只有左右能靠 horizontalAlignment 居中。这里单独铺一块「顶栏以下、底栏以上」
+                // 的可用区域，让按钮和说明文字在**屏幕垂直方向**也居中。
+                // 空态时列表里本来就没有条目，覆盖在上面不会有遮挡。
+                if (records.isEmpty() && !busy) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = contentTopInset, bottom = baseBottom)
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        EmptyRecords(onStart = { startRecording() })
                     }
                 }
 

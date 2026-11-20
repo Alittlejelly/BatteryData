@@ -2,6 +2,7 @@ package com.smalljelly.batterydata.ui
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -157,9 +158,19 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                         ) {
                             checking = true
                             scope.launch {
-                                result = UpdateChecker.check(context.applicationContext)
+                                val checked = UpdateChecker.check(context.applicationContext)
+                                result = checked
                                 checking = false
-                                showResultDialog = true
+                                // 已是最新：没必要弹窗打断，一条 Toast 就够
+                                if (!checked.hasUpdate && checked.error == null) {
+                                    Toast.makeText(
+                                        context,
+                                        "当前已是最新版本 $versionName",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    showResultDialog = true
+                                }
                             }
                         },
                     verticalAlignment = Alignment.CenterVertically,

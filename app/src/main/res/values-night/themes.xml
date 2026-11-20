@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      深色模式下的启动主题：父主题换成 Material 深色版，窗口底色是纯黑。
+      没有这个文件时，深色模式启动会先按浅色模板铺一层浅色底，
+      Compose 起来后才变黑（"白屏一下"）。
+    -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowSplashScreenBackground">@color/window_background</item>
+        <!-- 开屏不显示图标（默认会画应用图标，且不带圆角遮罩） -->
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/window_background</item>
+    </style>
+</resources>
