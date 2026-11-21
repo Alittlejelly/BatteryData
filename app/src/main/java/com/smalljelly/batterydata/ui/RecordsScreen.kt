@@ -510,6 +510,7 @@ fun RecordsScreen(
                         } else {
                             "确定要删除选中的 ${selectedIds.size} 条记录吗？"
                         },
+                        backgroundColor = colors.surfaceContainer,
                         onDismissRequest = { confirmDelete = false },
                     ) {
                         // 参照系统确认弹窗：两个等宽灰底按钮，危险操作标红

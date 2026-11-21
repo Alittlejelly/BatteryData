@@ -32,9 +32,17 @@ class BatterySettings(context: Context) {
         prefs.edit().putBoolean(KEY_TOP_BLUR_SELF_TEST, enabled).apply()
     }
 
+    /** 更新源：auto / github / gitee，默认自动（两个源都查） */
+    fun updateSource(): String = prefs.getString(KEY_UPDATE_SOURCE, "auto") ?: "auto"
+
+    fun setUpdateSource(value: String) {
+        prefs.edit().putString(KEY_UPDATE_SOURCE, value).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "battery_settings"
         const val KEY_MANUAL_DESIGN_MAH = "manual_design_capacity_mah"
         const val KEY_TOP_BLUR_SELF_TEST = "top_blur_self_test"
+        const val KEY_UPDATE_SOURCE = "update_source"
     }
 }

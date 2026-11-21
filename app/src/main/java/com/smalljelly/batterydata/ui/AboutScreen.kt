@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -24,7 +25,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -36,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
@@ -46,10 +50,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smalljelly.batterydata.R
 import com.smalljelly.batterydata.data.ApkUpdater
+import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.data.UpdateChecker
+import com.smalljelly.batterydata.ui.components.InnerDivider
 import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -60,6 +68,7 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
+import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -82,6 +91,13 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
     var checking by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var showResultDialog by remember { mutableStateOf(false) }
+
+    // 更新源：自动（GitHub + Gitee 并行）/ 手动锁定其中一个
+    val settings = remember { BatterySettings(context.applicationContext) }
+    var updateSource by remember {
+        mutableStateOf(UpdateChecker.Source.fromStorage(settings.updateSource()))
+    }
+    var showSourceDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = colors.background,
@@ -158,7 +174,7 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                         ) {
                             checking = true
                             scope.launch {
-                                val checked = UpdateChecker.check(context.applicationContext)
+                                val checked = UpdateChecker.check(context.applicationContext, updateSource)
                                 result = checked
                                 checking = false
                                 // 已是最新：没必要弹窗打断，一条 Toast 就够
@@ -189,6 +205,45 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                                 result?.hasUpdate == true -> "发现新版本"
                                 else -> "已是最新"
                             },
+                            fontSize = 14.sp,
+                            color = colors.onSurfaceVariantSummary,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            imageVector = MiuixIcons.Basic.ArrowRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = colors.onSurfaceVariantSummary,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 20.dp,
+                insideMargin = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { showSourceDialog = true },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "更新源",
+                        fontSize = 16.sp,
+                        color = colors.onSurfaceContainer,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = updateSource.label,
                             fontSize = 14.sp,
                             color = colors.onSurfaceVariantSummary,
                         )
@@ -262,6 +317,54 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                 }
             },
         )
+
+        // 同样是 OverlayDialog，同样要写在 content 里，否则宿主不渲染
+        if (showSourceDialog) {
+            OverlayDialog(
+                show = true,
+                title = "更新源",
+                backgroundColor = colors.surfaceContainer,
+                onDismissRequest = { showSourceDialog = false },
+                renderInRootScaffold = false,
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 用 miuix 自己的设置项组件：左右 16dp 内边距、按压反馈、标题/说明双行，
+                    // 跟系统「选择网络」这类弹窗是同一套，不是手搓的 Row
+                    UpdateChecker.Source.entries.forEachIndexed { index, option ->
+                        BasicComponent(
+                            title = option.label,
+                            summary = option.description,
+                            endActions = {
+                                if (updateSource == option) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Basic.Check,
+                                        contentDescription = "已选中",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = colors.primary,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                updateSource = option
+                                settings.setUpdateSource(option.storageValue)
+                                // 换源后旧结果作废，别让「发现新版本」的文案留在卡片上误导人
+                                result = null
+                                showSourceDialog = false
+                            },
+                        )
+                        if (index != UpdateChecker.Source.entries.lastIndex) {
+                            InnerDivider()
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    TextButton(
+                        text = "取消",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showSourceDialog = false },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -277,6 +380,8 @@ private fun UpdateResultDialog(
     val colors = MiuixTheme.colorScheme
     val hasUpdate = result?.hasUpdate == true
     val downloadUrl = result?.downloadUrl
+    val checkError = result?.error
+    val notes = result?.notes
 
     // 下载状态：每次弹窗重新打开都重置
     var downloading by remember(show) { mutableStateOf(false) }
@@ -294,7 +399,7 @@ private fun UpdateResultDialog(
 
     fun startInstall(apk: File) {
         if (!ApkUpdater.canInstall(context)) {
-            // 系统会拦下安装，先把用户送到「安装未知应用」授权页
+            // 系统会拦下安装：先把用户送到「安装未知应用」授权页，回来后仍点「安装」
             needPermission = true
             runCatching { context.startActivity(ApkUpdater.installSettingsIntent(context)) }
             return
@@ -331,112 +436,163 @@ private fun UpdateResultDialog(
                 startInstall(apk)
             }.onFailure { error ->
                 downloading = false
-                failure = error.message ?: "下载失败"
+                // 用户点「取消下载」也会走到这里（协程被取消），别把它当成失败弹出来
+                if (error !is kotlinx.coroutines.CancellationException) {
+                    failure = error.message ?: "下载失败"
+                }
             }
         }
     }
 
-    val summary = buildString {
-        when {
-            result == null -> Unit
-            result.error != null -> append("检查失败：${result.error}")
-            hasUpdate -> {
-                append("发现新版本 ${result.latestVersion ?: ""}")
-                result.notes?.let { append("\n$it") }
-                if (result.assetSize > 0) append("\n安装包 ${formatSize(result.assetSize)}")
-                if (result.downloadUrl == null) append("\n本次发布未附安装包，请前往发布页")
-                append("\n\n当前版本 ${result.currentVersion}")
-            }
-            else -> append("当前版本 ${result.currentVersion} 已是最新")
-        }
+    fun cancelDownload() {
+        job?.cancel()
+        job = null
+        downloading = false
+        percent = 0
+        downloaded = 0L
+    }
+
+    val dialogTitle = when {
+        checkError != null -> "检查更新失败"
+        hasUpdate -> "发现新版本 ${result?.latestVersion.orEmpty()}"
+        else -> "已是最新版本"
+    }
+    // 摘要只留一行基本信息：更新说明放到正文里按行显示，混在一起就是一团乱
+    val dialogSummary = buildString {
+        append("当前版本 ${result?.currentVersion.orEmpty()}")
+        val size = result?.assetSize ?: 0L
+        if (hasUpdate && size > 0) append("  ·  安装包 ${formatSize(size)}")
+        // 自动模式下两家都可能应答，标一句来源，排查"为什么版本对不上"时有用
+        if (hasUpdate && !result?.source.isNullOrBlank()) append("  ·  来自 ${result?.source}")
     }
 
     val statusLine = when {
         failure != null -> failure
-        needPermission -> "已下载完成。系统要求先在「安装未知应用」里允许本应用，返回后点「安装」。"
-        downloading -> "下载中 ${if (percent >= 0) "$percent%" else ""}  ·  ${formatSize(downloaded)}"
-        readyApk != null -> "已下载 ${formatSize(readyApk!!.length())}"
+        checkError != null -> checkError
+        needPermission -> "已下载完成。在系统设置里允许「安装未知应用」后，回来再点「安装」。"
+        downloading -> if (percent >= 0) {
+            "下载中 $percent%  ·  ${formatSize(downloaded)}"
+        } else {
+            "正在下载  ·  ${formatSize(downloaded)}"
+        }
+        readyApk != null -> "下载完成 ${formatSize(readyApk!!.length())}"
         else -> null
+    }
+
+    val primaryLabel = when {
+        downloading -> "下载中"
+        failure != null -> "重试"
+        readyApk != null -> "安装"
+        downloadUrl == null -> "前往发布页"
+        else -> "下载并安装"
     }
 
     OverlayDialog(
         show = show,
-        title = "检查更新",
-        summary = summary,
+        title = dialogTitle,
+        summary = dialogSummary,
+        // 默认底色是 background，和页面同色 —— 深色下背景全黑，弹窗完全糊在页面里分不开。
+        // 用卡片色（浅色偏白 / 深色 #1C1C1E），两层之间才有边界。
+        backgroundColor = colors.surfaceContainer,
         onDismissRequest = onDismiss,
         // 挂在关于页自己的 Scaffold 上（调用点在它的 content 内），才不会被本页盖住
         renderInRootScaffold = false,
     ) {
-        if (downloading) {
-            LinearProgressIndicator(
-                progress = if (percent >= 0) percent / 100f else null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp),
-            )
-            Spacer(Modifier.height(10.dp))
-        }
-        statusLine?.let { line ->
-            Text(
-                text = line,
-                fontSize = 13.sp,
-                lineHeight = 19.sp,
-                color = if (failure != null) colors.error else colors.onSurfaceVariantSummary,
-            )
-            Spacer(Modifier.height(10.dp))
-        }
-
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            TextButton(text = "关闭", onClick = onDismiss)
+            // 更新说明：按行显示（小节标题加粗），超出高度内部滚动，不把弹窗顶破
+            if (!notes.isNullOrBlank() && !downloading) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 196.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    notes.split("\n").forEach { line ->
+                        val heading = line.length <= 8 && !line.contains("：") && !line.contains(":")
+                        Text(
+                            text = line,
+                            fontSize = if (heading) 14.sp else 13.sp,
+                            lineHeight = 20.sp,
+                            fontWeight = if (heading) FontWeight.Medium else FontWeight.Normal,
+                            color = if (heading) colors.onSurfaceContainer else colors.onSurfaceVariantSummary,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
 
             if (downloading) {
-                Spacer(Modifier.width(12.dp))
-                TextButton(
-                    text = "取消下载",
-                    onClick = {
-                        job?.cancel()
-                        downloading = false
-                    },
+                LinearProgressIndicator(
+                    progress = if (percent >= 0) percent / 100f else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp),
                 )
+                Spacer(Modifier.height(10.dp))
             }
 
-            if (needPermission) {
-                Spacer(Modifier.width(12.dp))
-                TextButton(
-                    text = "去授权",
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
-                    onClick = {
-                        runCatching {
-                            context.startActivity(ApkUpdater.installSettingsIntent(context))
-                        }
-                    },
+            statusLine?.let { line ->
+                Text(
+                    text = line,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = if (failure != null || checkError != null) colors.error else colors.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
                 )
+                Spacer(Modifier.height(10.dp))
             }
 
-            if (hasUpdate && !downloading) {
-                Spacer(Modifier.width(12.dp))
-                when {
-                    // 已经下好了：直接装（用户在系统里授权完回来点这个）
-                    readyApk != null -> TextButton(
-                        text = "安装",
-                        colors = ButtonDefaults.textButtonColorsPrimary(),
-                        onClick = { startInstall(readyApk!!) },
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (hasUpdate) {
+                    // 和删除记录弹窗同一套：两个等宽按钮，主操作是 Miuix 主色实心按钮
+                    TextButton(
+                        text = if (downloading) "取消下载" else "稍后",
+                        modifier = Modifier.weight(1f),
+                        onClick = { if (downloading) cancelDownload() else onDismiss() },
                     )
-                    // 这次 release 没挂 apk，只能去网页
-                    downloadUrl == null -> TextButton(
-                        text = "前往发布页",
-                        colors = ButtonDefaults.textButtonColorsPrimary(),
-                        onClick = { onOpenUrl(result?.releasePage ?: "") },
-                    )
-                    else -> TextButton(
-                        text = if (failure != null) "重试" else "下载并安装",
-                        colors = ButtonDefaults.textButtonColorsPrimary(),
-                        onClick = { startDownload() },
-                    )
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        enabled = !downloading,
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                        onClick = {
+                            when {
+                                downloading -> Unit
+                                readyApk != null -> startInstall(readyApk!!)
+                                downloadUrl == null -> onOpenUrl(result?.releasePage ?: "")
+                                else -> startDownload()
+                            }
+                        },
+                    ) {
+                        Text(
+                            text = primaryLabel,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            color = if (downloading) colors.disabledOnPrimaryButton else Color.White,
+                        )
+                    }
+                } else {
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                        onClick = onDismiss,
+                    ) {
+                        Text(
+                            text = "知道了",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            color = Color.White,
+                        )
+                    }
                 }
             }
         }

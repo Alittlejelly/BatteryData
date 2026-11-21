@@ -255,6 +255,7 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
             show = confirmClear,
             title = "清空日志",
             summary = "将删除全部诊断日志文件，此操作不可恢复。",
+            backgroundColor = colors.surfaceContainer,
             onDismissRequest = { confirmClear = false },
             renderInRootScaffold = false,
         ) {

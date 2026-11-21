@@ -160,6 +160,8 @@ fun ManualCapacityDialog(
         show = show,
         title = "手动设定设计容量",
         summary = "手动值优先于系统节点与机型库数据。\n当前：$currentDesign",
+        // 默认底色与页面 background 同色，深色下整块糊在一起；用卡片色区分出边界
+        backgroundColor = MiuixTheme.colorScheme.surfaceContainer,
         onDismissRequest = onDismiss,
     ) {
         // 必须把整个 TextFieldValue（含 selection / composition）存在状态里。
