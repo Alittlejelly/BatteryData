@@ -39,10 +39,26 @@ class BatterySettings(context: Context) {
         prefs.edit().putString(KEY_UPDATE_SOURCE, value).apply()
     }
 
+    /** NexioUI 材质档：soft / liquid / frosted / none，默认柔和 */
+    fun materialLevel(): String = prefs.getString(KEY_MATERIAL_LEVEL, "soft") ?: "soft"
+
+    fun setMaterialLevel(value: String) {
+        prefs.edit().putString(KEY_MATERIAL_LEVEL, value).apply()
+    }
+
+    /** 小米超级岛：充电时在顶部岛显示电量/功率，默认开启（不支持的设备自动 no-op） */
+    fun islandEnabled(): Boolean = prefs.getBoolean(KEY_ISLAND_ENABLED, true)
+
+    fun setIslandEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ISLAND_ENABLED, enabled).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "battery_settings"
         const val KEY_MANUAL_DESIGN_MAH = "manual_design_capacity_mah"
         const val KEY_TOP_BLUR_SELF_TEST = "top_blur_self_test"
         const val KEY_UPDATE_SOURCE = "update_source"
+        const val KEY_MATERIAL_LEVEL = "material_level"
+        const val KEY_ISLAND_ENABLED = "island_enabled"
     }
 }

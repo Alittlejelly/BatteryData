@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 起，记录中的充电会升级成「实时更新」（状态栏胶囊 + 进度卡）。
+         这是个普通权限，装包即授予；用户仍可在系统设置里单独关掉本应用的实时更新，
+         关掉后会退回普通常驻通知。 -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- 应用内更新：下载完 APK 后拉起系统安装器。Android 8 起还需要用户在
          「安装未知应用」里给本应用授权，没授权时安装会被系统拦下。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -64,6 +68,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Shizuku IPC 接入：超级岛通知借 Shizuku 高权限 bypass XMSF 网络限制 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 
 </manifest>

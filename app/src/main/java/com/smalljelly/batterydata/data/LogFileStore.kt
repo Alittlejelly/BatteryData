@@ -2,6 +2,7 @@ package com.smalljelly.batterydata.data
 
 import android.content.Context
 import android.os.Build
+import android.os.Process
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,11 +26,28 @@ class LogFileStore(context: Context) {
 
     fun list(): List<LogFile> {
         if (!dir.exists()) dir.mkdirs()
+        cleanup()
         return dir.listFiles { f -> f.isFile && f.name.endsWith(".txt") }
             .orEmpty()
             .sortedByDescending { it.lastModified() }
             .map { LogFile(it, it.name, it.length(), it.lastModified()) }
     }
+
+    /** 定期清理：删除 7 天前的日志，避免无限堆积。每次 list/collect 时顺带执行。 */
+    private fun cleanup() {
+        val cutoff = System.currentTimeMillis() - RETENTION_DAYS * 24L * 3600L * 1000L
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".txt") }.orEmpty().forEach { f ->
+            if (f.lastModified() < cutoff) runCatching { f.delete() }
+        }
+    }
+
+    /** 抓取本进程最近的 logcat（运行日志）。Android 7+ 允许应用读自己的日志，无需额外权限。 */
+    private fun captureLogcat(lines: Int = 1000): String = runCatching {
+        val proc = Runtime.getRuntime().exec(
+            arrayOf("logcat", "-d", "-t", lines.toString(), "--pid=${Process.myPid()}"),
+        )
+        proc.inputStream.bufferedReader().use { it.readText() }.ifEmpty { "（暂无日志）" }
+    }.getOrDefault("（logcat 抓取失败）")
 
     fun read(log: LogFile): String = runCatching { log.file.readText() }
         .getOrDefault("（读取失败）")
@@ -152,7 +170,12 @@ class LogFileStore(context: Context) {
                 battery.healthPercent?.let { append("健康度：").append(it).append("%\n") }
                 battery.designCapacityMah?.let { append("设计容量：").append(it).append(" mAh\n") }
             }
+            append('\n')
+            append("—— 运行日志（本进程最近 logcat）——\n")
+            append(captureLogcat())
+            append('\n')
         }
+        cleanup()
         return runCatching {
             file.writeText(text)
             LogFile(file, file.name, file.length(), file.lastModified())
@@ -160,6 +183,7 @@ class LogFileStore(context: Context) {
     }
 
     companion object {
+        private const val RETENTION_DAYS = 7
         private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
         private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
         private val fullFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)

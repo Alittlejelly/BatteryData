@@ -24,17 +24,17 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.theme.NexioTheme
 
 /** MIUI 设置页里的分组标题。 */
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
+    NexioText(
         text = text,
         modifier = modifier.padding(start = 4.dp, bottom = 6.dp, top = 2.dp),
-        style = MiuixTheme.textStyles.subtitle,
-        color = MiuixTheme.colorScheme.onBackgroundVariant,
+        style = NexioTheme.textStyles.subtitle,
+        color = NexioTheme.colorScheme.onSurfaceVariantSummary,
     )
 }
 
@@ -44,21 +44,21 @@ fun InfoRow(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    valueColor: Color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+    valueColor: Color = NexioTheme.colorScheme.onSurfaceVariantSummary,
 ) {
     Row(
         modifier = modifier.fillMaxWidth().height(40.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(
+        NexioText(
             text = label,
-            style = MiuixTheme.textStyles.body1,
-            color = MiuixTheme.colorScheme.onSurfaceContainer,
+            style = NexioTheme.textStyles.body1,
+            color = NexioTheme.colorScheme.onSurfaceContainer,
         )
-        Text(
+        NexioText(
             text = value,
-            style = MiuixTheme.textStyles.body1,
+            style = NexioTheme.textStyles.body1,
             color = valueColor,
         )
     }
@@ -85,10 +85,10 @@ fun LiveBadge(text: String, modifier: Modifier = Modifier, dotColor: Color = Col
                 .background(dotColor, CircleShape),
         )
         Spacer(Modifier.width(5.dp))
-        Text(
+        NexioText(
             text = text,
             fontSize = 12.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            color = NexioTheme.colorScheme.onSurfaceVariantSummary,
         )
     }
 }
@@ -100,7 +100,7 @@ fun InnerDivider(modifier: Modifier = Modifier) {
         modifier
             .fillMaxWidth()
             .height(0.6.dp)
-            .background(MiuixTheme.colorScheme.dividerLine),
+            .background(NexioTheme.colorScheme.dividerLine),
     )
 }
 
@@ -110,6 +110,6 @@ fun VerticalInnerDivider(height: Int = 34) {
         Modifier
             .width(0.6.dp)
             .height(height.dp)
-            .background(MiuixTheme.colorScheme.dividerLine),
+            .background(NexioTheme.colorScheme.dividerLine),
     )
 }

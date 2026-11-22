@@ -24,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
@@ -32,7 +33,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +69,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.zIndex
@@ -79,31 +84,38 @@ import com.smalljelly.batterydata.data.formatEta
 import com.smalljelly.batterydata.ui.components.BatteryHealthCard
 import com.smalljelly.batterydata.ui.components.BatteryHeroCard
 import com.smalljelly.batterydata.ui.components.CardExpandOverlay
-import com.smalljelly.batterydata.ui.components.DurationCard
+import com.smalljelly.batterydata.ui.components.reportPressTo
 import com.smalljelly.batterydata.ui.components.InfoRow
 import com.smalljelly.batterydata.ui.components.InnerDivider
 import com.smalljelly.batterydata.ui.components.LiveChartCard
 import com.smalljelly.batterydata.ui.components.ManualCapacityDialog
-import com.smalljelly.batterydata.ui.components.MoreMenuOverlay
-import com.smalljelly.batterydata.ui.components.ProgressiveTopBlurBand
-import com.smalljelly.batterydata.ui.components.GlassMoreButton
-import com.smalljelly.batterydata.ui.components.BottomSwitcher
-import com.smalljelly.batterydata.ui.components.BottomTab
-import com.smalljelly.batterydata.ui.components.BottomTabIcon
-import com.smalljelly.batterydata.ui.components.GlassMoreButtonSize
+import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.TopBarActionSize
+import com.smalljelly.batterydata.ui.components.NexioTopContentSpacer
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
+import com.smalljelly.batterydata.ui.components.BatteryTabIcon
+import com.smalljelly.batterydata.ui.components.RecordsTabIcon
+import com.smalljelly.batterydata.ui.components.menuDropdownColors
 import com.smalljelly.batterydata.ui.components.capacityText
 import com.smalljelly.batterydata.ui.components.designSourceSuffix
 import com.smalljelly.batterydata.ui.components.RealtimeStatsCard
-import com.smalljelly.batterydata.ui.components.rememberTopBarMaterialAlpha
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.bottombar.BottomBar
+import com.haooz.nexioui.bottombar.BottomBarItem
+import com.haooz.nexioui.topappbar.CollapsibleTopAppBarDefaults
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.button.FlatTextButton
+import com.haooz.nexioui.button.ButtonDefaults
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.haooz.nexioui.dropdown.DropdownEntry
+import com.haooz.nexioui.dropdown.DropdownItem
+import com.haooz.nexioui.dropdown.DropdownMaskMode
+import com.haooz.nexioui.dropdown.DropdownPanelDragSelectState
+import com.haooz.nexioui.dropdown.OverlayDropdownPopup
+import com.haooz.nexioui.theme.NexioTheme
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.More
+import com.smalljelly.batterydata.ui.theme.AppMaterial
 import com.haooz.softglass.GlassMaterialLevel
 import com.haooz.softglass.SoftGlassTheme
 import com.haooz.softglass.backdrop.GlassBackdrop
@@ -160,8 +172,8 @@ private fun Screen.depth(): Int = when (this) {
 }
 
 private val AppTabs = listOf(
-    BottomTab(label = "电池", icon = BottomTabIcon.Battery),
-    BottomTab(label = "记录", icon = BottomTabIcon.Records),
+    BottomBarItem(icon = BatteryTabIcon, label = "电池", contentDescription = "电池"),
+    BottomBarItem(icon = RecordsTabIcon, label = "记录", contentDescription = "记录"),
 )
 
 @Composable
@@ -197,6 +209,9 @@ fun BatteryScreen() {
     var menuPage by remember { mutableIntStateOf(-1) }
     // 手势闭包只创建一次，必须实时读菜单状态，否则会一直拿到首次组合时的值
     val menuPageState by rememberUpdatedState(menuPage)
+    // 顶栏玻璃按钮正被按住/拖拽（拉伸交互）：期间禁用 Pager 横滑切页。
+    // 按下瞬间就置 true（手势尚无位移），比按位移阈值拦截更稳，斜向拖也不漏。
+    var topBarDragging by remember { mutableStateOf(false) }
     // 页内弹窗（删除确认 / 设计容量）打开时，底栏要让位
     var modalVisible by remember { mutableStateOf(false) }
     // 底栏选中项：点击/拖拽时先乐观更新，再由 pager 的落位回写，避免"滑块卡在两格之间"
@@ -225,6 +240,14 @@ fun BatteryScreen() {
     // 否则"采样层里包含采样者"会让 HWUI 渲染树成环（之前踩过，直接 SIGSEGV）。
     val barBackdrop = rememberLayerBackdrop()
 
+    // 顶栏按钮行（状态栏 + 折叠行）的底边 Y：在这行里横向拖拽是在拖玻璃按钮（拉伸交互），
+    // 不应触发左右切页。按钮的 inspectDragGestures observeConsumed=true，吃掉横向事件后
+    // 它仍能观察到拉伸，Pager 却不会翻页。
+    val topRowBottomPx = with(LocalDensity.current) {
+        (WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
+            CollapsibleTopAppBarDefaults.CollapsedHeight).toPx()
+    }
+
     LaunchedEffect(pagerState.currentPage) {
         barIndex = pagerState.currentPage
         // 换了页，上一页的菜单不该还挂着
@@ -252,14 +275,16 @@ fun BatteryScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .layerBackdrop(barBackdrop)
-                // 菜单展开时，横向滑动只用来收菜单，页面不动：在 Initial 阶段就把它吃掉，
-                // Pager 在 Main 阶段看到事件已被消费就不会启动翻页。
+                // 两种情况在 Initial 阶段吃掉横向位移，Pager 在 Main 阶段看到已消费就不翻页：
+                // 1) 菜单展开时横滑只用来收菜单；2) 在顶栏按钮行里横滑是在拖玻璃按钮（拉伸），
+                //    不切页。按钮 inspectDragGestures observeConsumed=true，仍能观察到拉伸。
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(
                             requireUnconsumed = false,
                             pass = PointerEventPass.Initial,
                         )
+                        val inTopButtonRow = down.position.y < topRowBottomPx
                         var blocking = false
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -267,15 +292,16 @@ fun BatteryScreen() {
                                 ?: event.changes.firstOrNull { it.pressed }
                             if (change == null || !change.pressed) break
                             if (!blocking) {
-                                // 菜单没开就别掺和，让 Pager 正常翻页
-                                if (menuPageState < 0) break
+                                val menuOpen = menuPageState >= 0
+                                // 菜单没开、又不在顶栏按钮行 → 让 Pager 正常翻页
+                                if (!menuOpen && !inTopButtonRow) break
                                 val total = change.position - down.position
                                 if (abs(total.x) > viewConfiguration.touchSlop &&
                                     abs(total.x) > abs(total.y)
                                 ) {
                                     blocking = true
-                                    // 先播菜单收起动画，这次手势剩下的位移全部吃掉
-                                    menuPage = -1
+                                    // 菜单开着才播收起动画；按钮行拖拽只是吃掉横滑，不动菜单
+                                    if (menuOpen) menuPage = -1
                                 } else if (abs(total.y) > viewConfiguration.touchSlop) {
                                     // 纵向：交给列表滚动 / 顶栏折叠
                                     break
@@ -308,7 +334,7 @@ fun BatteryScreen() {
                 // 菜单展开时整页锁死：横滑只用来收菜单（下面的 Initial 拦截负责），
                 // 页面一动不动。光靠消费事件不够稳 —— Pager 的拖动检测有时已经启动，
                 // 这一条是硬开关，保证不会再出现"菜单开着页面滑走一半"。
-                userScrollEnabled = menuPage < 0,
+                userScrollEnabled = menuPage < 0 && !topBarDragging,
                 // 滑到头不要回弹拉伸（否则会露出页面外的空白，像是"滑出界")
                 overscrollEffect = null,
             ) { page ->
@@ -318,6 +344,7 @@ fun BatteryScreen() {
                         onMenuOpenChange = { open -> menuPage = if (open) 0 else -1 },
                         onOpenAbout = { showAbout = true },
                         onModalVisibleChange = { modalVisible = it },
+                        onTopBarPressChange = { topBarDragging = it },
                     )
 
                     else -> {
@@ -345,6 +372,7 @@ fun BatteryScreen() {
                             },
                             onOpenAbout = { showAbout = true },
                             onModalVisibleChange = { modalVisible = it },
+                            onTopBarPressChange = { topBarDragging = it },
                         )
                     }
                 }
@@ -442,7 +470,7 @@ fun BatteryScreen() {
     }
 }
 
-/** 悬浮底栏：避开导航栏，胶囊自身宽度由 BottomSwitcher 按每格 21% 屏宽算 */
+/** 悬浮底栏：避开导航栏，胶囊宽度与拖拽手势都由 NexioUI 的 BottomBar 负责 */
 @Composable
 private fun PageBottomBar(
     selected: Int,
@@ -455,9 +483,9 @@ private fun PageBottomBar(
             .windowInsetsPadding(WindowInsets.navigationBars),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        BottomSwitcher(
-            tabs = AppTabs,
-            selected = selected,
+        BottomBar(
+            items = AppTabs,
+            selectedIndex = selected,
             onSelect = onSelect,
             backdrop = backdrop,
             modifier = Modifier.padding(bottom = 10.dp),
@@ -471,9 +499,10 @@ private fun HomeScreen(
     onMenuOpenChange: (Boolean) -> Unit,
     onOpenAbout: () -> Unit,
     onModalVisibleChange: (Boolean) -> Unit,
+    onTopBarPressChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val repository = remember { BatteryRepository(context.applicationContext) }
     val settings = remember { BatterySettings(context.applicationContext) }
     var sample by remember { mutableStateOf(repository.snapshot()) }
@@ -499,24 +528,32 @@ private fun HomeScreen(
         }
     }
 
-    val scrollBehavior = MiuixScrollBehavior()
     val scrollState = rememberScrollState()
-    // 顶栏材质：页面在顶部时没有模糊带、按钮没有玻璃和阴影，下滑后一起淡入
-    val topBarAlpha = rememberTopBarMaterialAlpha(scrollBehavior)
+    // 顶栏：折叠、材质和内容让位共用一份状态（内部是库的 CollapsibleTopAppBar + 渐进模糊带）
+    val topBarState = rememberNexioTopBarState()
     val backdrop = rememberLayerBackdrop()
     val pageBackdrop = rememberLayerBackdrop()
     // menuOpen 由容器层持有（底栏要能在菜单展开时点），menuMounted 是本页的挂载态：
     // 收起动画播完才移除
     var menuMounted by remember { mutableStateOf(false) }
+    // 页面这颗三点钮的过渡态：true=进入隐藏方向（展开淡出 / 退场保持隐藏），
+    // false=面板已彻底退场、按钮正常显示。alpha 随 fraction 迅速淡出（见按钮 graphicsLayer）。
+    var menuIconHidden by remember { mutableStateOf(false) }
+    var menuFraction by remember { mutableFloatStateOf(0f) }
     var openAboutAfterMenu by remember { mutableStateOf(false) }
     var openCapacityDialogAfterMenu by remember { mutableStateOf(false) }
-    // 菜单形变的锚点（右上角那颗圆按钮的右上角，root 坐标）
-    var menuAnchorRightPx by remember { mutableStateOf(0f) }
-    var menuAnchorTopPx by remember { mutableStateOf(0f) }
+    // 菜单形变的锚点由库的浮层自己从触发区测量，这里不再手记坐标
     var showManualCapacityDialog by remember { mutableStateOf(false) }
 
-    // 外部（底栏点击）把 menuOpen 置 false 时，本页照样要挂载出来播收起动画
-    LaunchedEffect(menuOpen) { if (menuOpen) menuMounted = true }
+    // 外部（底栏点击）把 menuOpen 置 false 时，本页照样要挂载出来播收起动画。
+    // 展开即进入淡出方向：f=0 时 alpha 仍为 1（按钮可见，与浮层收起态重合），随 fraction 迅速淡出，
+    // 不会空帧；玻璃采到的残留也是淡出中的，不会闪。
+    LaunchedEffect(menuOpen) {
+        if (menuOpen) {
+            menuMounted = true
+            menuIconHidden = true
+        }
+    }
 
     BackHandler(enabled = menuOpen || menuMounted) { onMenuOpenChange(false) }
 
@@ -524,75 +561,35 @@ private fun HomeScreen(
     LaunchedEffect(showManualCapacityDialog) { onModalVisibleChange(showManualCapacityDialog) }
 
     SoftGlassTheme(
-        level = GlassMaterialLevel.FROSTED,
+        // 材质档跟关于页的设置走：柔和/液态/磨砂/关闭
+        level = AppMaterial.current.glassLevel,
         isDark = isSystemInDarkTheme(),
         hasWallpaper = false,
     ) {
-    Box(Modifier.fillMaxSize()) {
-    Scaffold(
-        modifier = Modifier.layerBackdrop(pageBackdrop),
-        topBar = {
-            Box(Modifier.fillMaxWidth().zIndex(10f)) {
-                // 顶栏材质：SoftGlass 直接采样下面那份内容（内容列已 layerBackdrop 录进去）
-                ProgressiveTopBlurBand(
-                    backdrop = backdrop,
-                    page = "home",
-                    materialAlpha = topBarAlpha,
-                    modifier = Modifier.matchParentSize(),
-                )
-                TopAppBar(
-                    title = "电池",
-                    largeTitle = "电池数据",
-                    color = Color.Transparent,
-                    scrollBehavior = scrollBehavior,
-                    actions = {
-                        Box(
-                            Modifier.onGloballyPositioned {
-                                val rect = it.boundsInRoot()
-                                menuAnchorRightPx = rect.right
-                                menuAnchorTopPx = rect.top
-                            },
-                        ) {
-                            if (menuMounted) {
-                                // 展开期间圆按钮由浮层自己画（形变起点就是它），这里只占位保持布局
-                                Spacer(Modifier.size(GlassMoreButtonSize))
-                            } else {
-                                GlassMoreButton(
-                                    backdrop = backdrop,
-                                    materialAlpha = topBarAlpha,
-                                    onClick = {
-                                        menuMounted = true
-                                        onMenuOpenChange(true)
-                                    },
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-        },
-        containerColor = colors.background,
-        contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { innerPadding ->
-        Column(
+    Box(Modifier.fillMaxSize().layerBackdrop(pageBackdrop)) {
+        // 采样层要自带不透明底：layerBackdrop 只录它内层的内容，底色必须写在它**后面**。
+        // 之前底色在外层，录到的图层全透明 —— 顶栏渐进模糊的 AGSL 把透明采样全部丢弃，
+        // 糊带等于没画（"顶部没有渐进模糊"）；弹窗玻璃从这里取素材也只剩灰板。
+        Box(
             modifier = Modifier
+                .fillMaxSize()
                 .layerBackdrop(backdrop)
-                .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp),
+                .background(colors.background),
         ) {
-            // 顶栏改成渐进模糊后内容要从栏底下穿过，顶部留白改成随内容滚动的 Spacer
-            Spacer(Modifier.height(innerPadding.calculateTopPadding() + 10.dp))
-            BatteryHeroCard(sample = sample, etaText = etaText(sample, screenOnCurrents))
-            // 放电时的「可亮屏时长」已经和上面那句「预计可用」重复，只在充电时留这张卡
-            durationInfo(sample)?.let { duration ->
-                Spacer(Modifier.height(12.dp))
-                DurationCard(
-                    label = duration.label,
-                    value = duration.value,
-                    note = duration.note,
-                )
-            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    // 顶栏让位放进滚动内容里（下面的 NexioTopContentSpacer），不套在容器外：
+                    // 外层 padding 会把视口裁到糊带之下，内容永远滚不进糊带、糊不到东西
+                    .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 16.dp),
+            ) {
+                // 让位 = 状态栏 + 折叠行 + 大标题展开段（随折叠在布局期收起）
+                NexioTopContentSpacer(topBarState)
+                Spacer(Modifier.height(10.dp))
+                BatteryHeroCard(sample = sample, etaText = etaText(sample, screenOnCurrents))
+            // 充电预计时间已在大电池卡内显示，下面不再重复一张时长卡
             Spacer(Modifier.height(12.dp))
             RealtimeStatsCard(sample = sample)
             Spacer(Modifier.height(12.dp))
@@ -606,7 +603,7 @@ private fun HomeScreen(
             Spacer(Modifier.height(12.dp))
             InfoCard(sample)
             Spacer(Modifier.height(18.dp))
-            Text(
+            NexioText(
                 text = "数据每 10 秒从系统 BatteryManager 与 power_supply 节点读取\n个别机型不开放电流、容量数据时会显示“未公开”",
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
@@ -615,13 +612,137 @@ private fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             // 悬浮底栏不再占 Scaffold 的 bottomBar 槽，这里手动留出栏高（56dp + 边距）
-            Spacer(Modifier.height(28.dp + 76.dp))
+                Spacer(Modifier.height(28.dp + 76.dp))
+            }
         }
 
+        // 菜单条目：点击先收菜单，等收起动画播完再切页 / 弹对话框
+        val currentOnMenuOpenChange by rememberUpdatedState(onMenuOpenChange)
+        val menuEntry = remember {
+            DropdownEntry(
+                items = listOf(
+                    DropdownItem(
+                        text = "关于",
+                        onClick = {
+                            openAboutAfterMenu = true
+                            currentOnMenuOpenChange(false)
+                        },
+                    ),
+                    DropdownItem(
+                        text = "手动设置电池容量",
+                        onClick = {
+                            openCapacityDialogAfterMenu = true
+                            currentOnMenuOpenChange(false)
+                        },
+                    ),
+                ),
+            )
+        }
+        val menuButtonSize = with(LocalDensity.current) {
+            val px = TopBarActionSize.roundToPx()
+            IntSize(px, px)
+        }
+
+        // 顶栏盖在内容之上：库的折叠栏自己变高变矮，内容位置由上面的 inset 固定
+        NexioTopBar(
+            state = topBarState,
+            title = "电池",
+            largeTitle = "电池数据",
+            backdrop = backdrop,
+            modifier = Modifier.align(Alignment.TopCenter),
+            actions = { backdropAlpha, shadowAlpha ->
+                // 三点按钮就是下拉的锚点：面板从这颗按钮的位置长开，收回到它
+                Box {
+                    // 两态玻璃钮：页面顶部普通态、滚出材质后玻璃态。节点保持渲染只用 alpha 隐藏，
+                    // 展开时延后两帧再藏（见 menuIconHidden）——先让浮层把收起态图标画上屏，
+                    // 避免「页面图标已没、浮层还没画」的空帧，也避免图标残留被玻璃采成鬼影。
+                    NexioIconButton(
+                        onClick = {
+                            menuMounted = true
+                            onMenuOpenChange(true)
+                        },
+                        backdrop = backdrop,
+                        icon = MiuixIcons.More,
+                        contentDescription = "更多",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
+                        enabled = !menuOpen,
+                        // 展开随 fraction 迅速淡出（玻璃钮整体淡出，不另加模糊以免糊掉玻璃）；
+                        // 退场保持隐藏，onDismissFinished 才硬切回 1。收起态图标已由 collapseContent
+                        // 用同尺寸居中 Box 与按钮逐像素重合，交接不跳。
+                        modifier = Modifier
+                            .graphicsLayer {
+                                alpha = if (!menuIconHidden) 1f
+                                    else if (menuOpen) (1f - menuFraction / 0.18f).coerceIn(0f, 1f)
+                                    else 0f
+                            }
+                            // 按住/拖这颗按钮期间禁用横滑切页
+                            .reportPressTo(onTopBarPressChange),
+                    )
+                    // 库的浮层下拉挂到最外层 Scaffold 的弹层宿主：
+                    // 它落在被采样页面层**之外**，采样层不会包含采样者。
+                    // （之前自研菜单和采样层在同一棵子树里，渲染树成环 → 首页一点就闪退）
+                    OverlayDropdownPopup(
+                        entry = menuEntry,
+                        show = menuOpen,
+                        onDismiss = { onMenuOpenChange(false) },
+                        onDismissFinished = {
+                            menuMounted = false
+                            // 退场动画彻底跑完才把页面这颗按钮还回来（硬切，不做半透明过渡）
+                            menuIconHidden = false
+                            menuFraction = 0f
+                            if (openAboutAfterMenu) {
+                                openAboutAfterMenu = false
+                                onOpenAbout()
+                            } else if (openCapacityDialogAfterMenu) {
+                                openCapacityDialogAfterMenu = false
+                                showManualCapacityDialog = true
+                            }
+                        },
+                        maxHeight = null,
+                        dropdownColors = menuDropdownColors(),
+                        renderInRootScaffold = true,
+                        collapseOnSelection = false,
+                        onFractionProgress = { menuFraction = it },
+                        // 跟手滑选：按住面板上下滑动即可连续选择选项
+                        dragSelectState = remember { DropdownPanelDragSelectState(maskMode = DropdownMaskMode.Sliding) },
+                        liquidGlassBackdrop = if (AppMaterial.current.panelBlurDp > 0.dp) {
+                            pageBackdrop
+                        } else {
+                            null
+                        },
+                        collapseSize = menuButtonSize,
+                        collapseContent = {
+                            // 收起态必须和页面那颗按钮逐像素重合：按钮是 42dp 圆里居中 22dp 图标，
+                            // 这里也用同尺寸 Box 居中同一图标。之前直接放 22dp 图标会被库钉在
+                            // 面板右上角，与按钮的居中图标差约 10dp —— 展开 / 归位交接时图标
+                            // 跳一下，就是用户看到的「闪烁」。
+                            Box(
+                                modifier = Modifier.size(TopBarActionSize),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.More,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp),
+                                    tint = colors.onBackground,
+                                )
+                            }
+                        },
+                        anchorOffsetX = 0.dp,
+                        anchorOffsetY = 0.dp,
+                    )
+                }
+            },
+        )
+
+        // 弹窗盖在顶栏之上（玻璃面板自己模糊，背景只压暗）
         ManualCapacityDialog(
             show = showManualCapacityDialog,
             manualCapacity = settings.manualDesignCapacityMah(),
             currentDesign = capacityText(sample.designCapacityMah) + designSourceSuffix(sample.designSource),
+            backdrop = backdrop,
             onSet = { value ->
                 settings.setManualDesignCapacityMah(value)
                 sample = repository.snapshot()
@@ -629,38 +750,8 @@ private fun HomeScreen(
             },
             onDismiss = { showManualCapacityDialog = false },
         )
-        }
 
-        if (menuMounted) {
-            MoreMenuOverlay(
-                show = menuOpen,
-                anchorRightPx = menuAnchorRightPx,
-                anchorTopPx = menuAnchorTopPx,
-                pageBackdrop = pageBackdrop,
-                onDismiss = { onMenuOpenChange(false) },
-                onExitFinished = {
-                    menuMounted = false
-                    // 菜单播完收起动画再切页面 / 弹对话框，避免两层动画叠在一起，
-                    // 也避免菜单的玻璃把刚弹出来的对话框一起采样进面板
-                    if (openAboutAfterMenu) {
-                        openAboutAfterMenu = false
-                        onOpenAbout()
-                    } else if (openCapacityDialogAfterMenu) {
-                        openCapacityDialogAfterMenu = false
-                        showManualCapacityDialog = true
-                    }
-                },
-                onAbout = {
-                    onMenuOpenChange(false)
-                    openAboutAfterMenu = true
-                },
-                onManualCapacity = {
-                    onMenuOpenChange(false)
-                    openCapacityDialogAfterMenu = true
-                },
-            )
-        }
-
+        // 菜单已由库的 OverlayDropdownPopup 渲染到窗口弹层，这里不再挂第二棵树
     }
     }
 }
@@ -668,15 +759,15 @@ private fun HomeScreen(
 
 @Composable
 private fun InfoCard(sample: BatterySample) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
         insideMargin = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
     ) {
-        Text(
+        NexioText(
             text = "电池信息",
-            style = MiuixTheme.textStyles.title3,
+            style = NexioTheme.textStyles.title3,
             color = colors.onSurfaceContainer,
         )
         Spacer(Modifier.height(10.dp))
@@ -711,26 +802,6 @@ private fun etaText(sample: BatterySample, screenOnCurrents: List<Float>): Strin
         temperature != null -> "电池温度 $temperature，状态${sample.healthText}"
         else -> "剩余电量 ${sample.level}%"
     }
-}
-
-private data class DurationEstimate(
-    val label: String,
-    val value: String?,
-    val note: String?,
-)
-
-/**
- * 只在充电时给一张「剩余充电时长」。
- * 放电时的可亮屏时长去掉了：大电池卡下面的「预计可用」用的是同一套估算，
- * 两个数字并排显示只是重复。
- */
-private fun durationInfo(sample: BatterySample): DurationEstimate? = when {
-    sample.isCharging -> DurationEstimate(
-        label = "剩余充电时长",
-        value = formatEta(sample.etaMinutes),
-        note = "按当前充电功率推算",
-    )
-    else -> null
 }
 
 /** 剩余电量（mAh）：优先用库仑计，读不到就按「电量% × 满电容量」反推 */

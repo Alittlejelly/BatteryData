@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smalljelly.batterydata.data.BatterySample
 import com.smalljelly.batterydata.ui.theme.batteryAccent
-import top.yukonga.miuix.kmp.basic.Text
+import com.haooz.nexioui.text.NexioText
 import java.util.Locale
 
 /**
@@ -102,7 +102,7 @@ fun BatteryHeroCard(
 
             Column {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
+                    NexioText(
                         text = level.toString(),
                         fontSize = 72.sp,
                         fontWeight = FontWeight.Bold,
@@ -111,7 +111,7 @@ fun BatteryHeroCard(
                         color = contentColor,
                         style = textStyle,
                     )
-                    Text(
+                    NexioText(
                         text = "%",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -121,7 +121,7 @@ fun BatteryHeroCard(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
+                NexioText(
                     text = etaText ?: "正在采集实时数据…",
                     fontSize = 14.sp,
                     color = contentColor,
@@ -154,6 +154,6 @@ private fun StatusPill(
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = label, fontSize = 12.sp, color = Color.White, style = textStyle)
+        NexioText(text = label, fontSize = 12.sp, color = Color.White, style = textStyle)
     }
 }

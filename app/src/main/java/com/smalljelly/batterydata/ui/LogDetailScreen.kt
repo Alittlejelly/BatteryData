@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -19,18 +20,22 @@ import androidx.compose.ui.unit.sp
 import com.haooz.softglass.backdrop.backdrops.layerBackdrop
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
 import com.smalljelly.batterydata.data.LogFile
-import com.smalljelly.batterydata.ui.components.GlassBackButton
-import com.smalljelly.batterydata.ui.components.GlassIconButton
-import com.smalljelly.batterydata.ui.components.PageTopBar
+import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
-import com.smalljelly.batterydata.ui.components.rememberTopBarMaterialAlpha
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
 import com.smalljelly.batterydata.ui.components.rememberTopBarPull
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Share
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.rotate
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.haooz.nexioui.icon.extended.ChevronBackward
+import com.haooz.nexioui.scaffold.Scaffold
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.icon.NexioIcons
+import com.haooz.nexioui.icon.extended.Share
+import com.haooz.nexioui.theme.NexioTheme
+import com.haooz.nexioui.overscroll.overScrollVertical
 
 /**
  * 日志详情的模糊带向下额外覆盖的篇幅（**物理像素**）。
@@ -54,12 +59,13 @@ private const val BlurOverhangPx = 50f
 @Composable
 fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
     val context = LocalContext.current
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val listState = rememberLazyListState()
 
     // 和记录页同一套：滚动量 + 拖动位移，两路取最大
-    val (pullModifier, pull) = rememberTopBarPull()
-    val topBarAlpha = rememberTopBarMaterialAlpha(listState, pull)
+    val (pullModifier, _) = rememberTopBarPull()
+    // 顶栏：折叠 / 材质由库的 CollapsibleTopAppBar 负责
+    val topBarState = rememberNexioTopBarState()
     val backdrop = rememberLayerBackdrop()
     // 模糊带向下多盖的篇幅（dp）。栏节点会真的变高这么多，所以下面让位时要减掉它，
     // 正文起点才不会跟着往下跑。
@@ -78,36 +84,31 @@ fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            PageTopBar(
+            NexioTopBar(
+                state = topBarState,
                 title = "日志详情",
                 largeTitle = null,
-                collapseProgress = { 0f },
                 backdrop = backdrop,
-                materialAlpha = topBarAlpha,
-                page = "logdetail",
-                // 这页的栏只有 状态栏 + 48dp，比记录页矮一半，按「高度/6」算出来贴着下限
-                // （14dp）；正文是 14sp 密排小字，糊得太轻看不出材质。半径补到和记录页
-                // 同一量级，表面色用和记录页一样的浓度。
-                blurRadiusScale = 1.5f,
-                tintIntensity = 0.18f,
-                // 模糊带往下多盖 50px：这页栏矮（状态栏 + 48dp），渐变走完得太快，
-                // 正文一钻进栏下就"整块消失"。多盖这一段靠把栏节点画高来实现，
-                // 下面的让位再减去同一个值，正文起点不变。
-                blurOverhang = blurOverhang,
-                navigation = {
-                    GlassBackButton(
-                        backdrop = backdrop,
+                navigation = { backdropAlpha, shadowAlpha ->
+                    NexioIconButton(
                         onClick = onBack,
-                        materialAlpha = topBarAlpha,
+                        backdrop = backdrop,
+                        icon = NexioIcons.ChevronBackward,
+                        contentDescription = "返回",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
                     )
                 },
-                actions = {
-                    GlassIconButton(
-                        backdrop = backdrop,
-                        imageVector = MiuixIcons.Share,
-                        contentDescription = "分享日志",
+                actions = { backdropAlpha, shadowAlpha ->
+                    NexioIconButton(
                         onClick = { share() },
-                        materialAlpha = topBarAlpha,
+                        backdrop = backdrop,
+                        icon = NexioIcons.Share,
+                        contentDescription = "分享日志",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
                     )
                 },
             )
@@ -138,6 +139,8 @@ fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
                     // 这里在 LazyColumn 自身铺一层页面底色（颜色和 Scaffold 完全一致，
                     // 视觉上无差别），顶栏就能真正糊出"纸面透过磨砂玻璃"的材质。
                     .background(colors.background)
+                    // 顶栏折叠 / 材质（按钮两态）的滚动来源，作为回弹层的父连接
+                    .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
                     .overScrollVertical()
                     // 内层才能拿到"列表没消费掉"的增量（回弹位移）
                     .then(pullModifier),
@@ -150,7 +153,7 @@ fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
                 ),
             ) {
                 item(key = "body") {
-                    Text(
+                    NexioText(
                         text = content,
                         fontSize = 14.sp,
                         lineHeight = 22.sp,

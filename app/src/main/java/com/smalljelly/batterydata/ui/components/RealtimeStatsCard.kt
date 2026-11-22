@@ -16,10 +16,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smalljelly.batterydata.data.BatterySample
-import com.smalljelly.batterydata.ui.theme.BatteryGreen
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.theme.NexioTheme
 import java.util.Locale
 import kotlin.math.abs
 
@@ -31,9 +30,8 @@ fun RealtimeStatsCard(
     sample: BatterySample,
     modifier: Modifier = Modifier,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val current = sample.currentMa
-    val currentColor = if (current != null && current > 0f) BatteryGreen else colors.onSurfaceContainer
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -45,9 +43,9 @@ fun RealtimeStatsCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
+            NexioText(
                 text = "实时数据",
-                style = MiuixTheme.textStyles.title3,
+                style = NexioTheme.textStyles.title3,
                 color = colors.onSurfaceContainer,
             )
             LiveBadge(text = "每 10 秒刷新")
@@ -64,9 +62,8 @@ fun RealtimeStatsCard(
             )
             StatCell(
                 label = "电流",
-                value = current?.let { String.format(Locale.US, "%.0f", abs(it)) } ?: "—",
-                unit = "mA",
-                valueColor = currentColor,
+                value = current?.let { String.format(Locale.US, "%.2f", abs(it) / 1000f) } ?: "—",
+                unit = "A",
                 caption = current?.let { if (it > 0) "充电" else "放电" },
             )
         }
@@ -93,15 +90,15 @@ private fun RowScope.StatCell(
     label: String,
     value: String,
     unit: String,
-    valueColor: androidx.compose.ui.graphics.Color = MiuixTheme.colorScheme.onSurfaceContainer,
+    valueColor: androidx.compose.ui.graphics.Color = NexioTheme.colorScheme.onSurfaceContainer,
     caption: String? = null,
 ) {
-    val secondary = MiuixTheme.colorScheme.onSurfaceVariantSummary
+    val secondary = NexioTheme.colorScheme.onSurfaceVariantSummary
     Column(modifier = Modifier.weight(1f)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text = label, fontSize = 13.sp, color = secondary)
+            NexioText(text = label, fontSize = 13.sp, color = secondary)
             if (caption != null) {
-                Text(
+                NexioText(
                     text = "($caption)",
                     fontSize = 11.sp,
                     color = secondary.copy(alpha = 0.7f),
@@ -110,14 +107,14 @@ private fun RowScope.StatCell(
         }
         Spacer(Modifier.height(5.dp))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(
+            NexioText(
                 text = value,
                 fontSize = 25.sp,
                 lineHeight = 27.sp,
                 fontWeight = FontWeight.Medium,
                 color = valueColor,
             )
-            Text(
+            NexioText(
                 text = unit,
                 fontSize = 12.sp,
                 color = secondary,

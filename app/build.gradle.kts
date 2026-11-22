@@ -23,8 +23,8 @@ android {
         applicationId = "com.smalljelly.batterydata"
         minSdk = 26
         targetSdk = 37
-        versionCode = 102
-        versionName = "1.0.2"
+        versionCode = 103
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -59,6 +59,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // Shizuku 特权服务（超级岛 XMSF 网络 bypass）需要 AIDL 接口
+        aidl = true
     }
 }
 
@@ -70,9 +72,13 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core)
+    implementation(libs.nexioui)
+    implementation(libs.softglass)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     implementation(libs.miuix.ui)
     implementation(libs.miuix.icons)
-    implementation(libs.softglass)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

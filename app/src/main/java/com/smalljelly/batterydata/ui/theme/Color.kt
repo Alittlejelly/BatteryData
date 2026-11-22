@@ -8,12 +8,12 @@ val BatteryGreenDeep = Color(0xFF11B14F)
 val BatteryAmber = Color(0xFFFFA51F)
 val BatteryRed = Color(0xFFFF4D3F)
 
-/** 图表蓝，取自系统设置的曲线配色 */
-val ChartBlue = Color(0xFF3482FF)
+/** 全局统一品牌蓝 */
+val ChartBlue = Color(0xFF3481FF)
 
 val LightBackground = Color(0xFFF1F2F4)
 val LightCard = Color(0xFFFFFFFF)
-val LightTextPrimary = Color(0xFF101010)
+val LightTextPrimary = Color(0xFF000000)
 val LightTextSecondary = Color(0xFF8A8A8E)
 val LightDivider = Color(0xFFEFEFF1)
 

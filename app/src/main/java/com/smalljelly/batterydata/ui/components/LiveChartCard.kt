@@ -45,9 +45,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smalljelly.batterydata.ui.theme.ChartBlue
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.theme.NexioTheme
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -72,7 +72,7 @@ fun LiveChartCard(
     intervalMs: Long = 30_000L,
     modifier: Modifier = Modifier,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     var metric by remember { mutableStateOf(ChartMetric.CURRENT) }
 
     Card(
@@ -85,9 +85,9 @@ fun LiveChartCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
+            NexioText(
                 text = "实时曲线",
-                style = MiuixTheme.textStyles.title3,
+                style = NexioTheme.textStyles.title3,
                 color = colors.onSurfaceContainer,
             )
             SegmentedSlider(
@@ -110,13 +110,13 @@ fun LiveChartCard(
                     .background(if (metric == ChartMetric.CURRENT) ChartBlue else Color(0xFFFFA51F)),
             )
             Spacer(Modifier.width(6.dp))
-            Text(
+            NexioText(
                 text = if (metric == ChartMetric.CURRENT) "充放电电流" else "电池电压",
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.weight(1f))
-            Text(
+            NexioText(
                 text = latest?.let { formatValue(metric, it) + " " + metric.unit } ?: "等待采样",
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,
@@ -133,8 +133,8 @@ fun LiveChartCard(
 
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(startAxisLabel(intervalMs), fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
-            Text("现在", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
+            NexioText(startAxisLabel(intervalMs), fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
+            NexioText("现在", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
         }
     }
 }
@@ -150,7 +150,7 @@ private fun MetricChart(
     metric: ChartMetric,
     accent: Color,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     // 注意：values 是同一个 SnapshotStateList 实例，不能用 remember(values) 做 key，
     // 否则纵轴范围会一直停留在第一次（空列表）计算出的 0..1。
     val range = computeRange(
@@ -248,10 +248,10 @@ private fun MetricChart(
 
 @Composable
 private fun AxisLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
+    NexioText(
         text = text,
         fontSize = 11.sp,
-        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        color = NexioTheme.colorScheme.onSurfaceVariantSummary,
         textAlign = TextAlign.End,
         modifier = modifier.fillMaxWidth(),
     )

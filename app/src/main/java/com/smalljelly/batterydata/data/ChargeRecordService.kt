@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.core.app.ServiceCompat
 import com.smalljelly.batterydata.MainActivity
 import com.smalljelly.batterydata.R
@@ -125,13 +126,28 @@ class ChargeRecordService : Service() {
             .setOngoing(true)
             .build()
 
+    // 通知内容去重：每 10 秒采样都会走到这里，但只有「展示内容真的变了」才重发，
+    // 否则系统会把同一条通知反复重排/刷新，体验差。电量/分钟/平均功率变化才更新。
+    private var lastNotifKey: String? = null
+
     private fun updateNotification(state: RecorderState) {
         val manager = getSystemService(NotificationManager::class.java) ?: return
         val notification = buildNotification(state)
-        runCatching {
-            if (notification == null) manager.cancel(NOTIFICATION_ID)
-            else manager.notify(NOTIFICATION_ID, notification)
+        if (notification == null) {
+            lastNotifKey = null
+            runCatching { manager.cancel(NOTIFICATION_ID) }
+            return
         }
+        val key = notifKey(state)
+        if (key == lastNotifKey) return
+        lastNotifKey = key
+        runCatching { manager.notify(NOTIFICATION_ID, notification) }
+    }
+
+    private fun notifKey(state: RecorderState): String = when (state) {
+        is RecorderState.Waiting -> "w${state.level}"
+        is RecorderState.Recording -> "r${state.level}-${state.minutes}-${state.avgPowerW?.toInt()}"
+        RecorderState.Idle -> "idle"
     }
 
     /** 只有等待 / 记录中才有通知；Idle 返回 null，表示不该有这条通知 */
@@ -156,12 +172,12 @@ class ChargeRecordService : Service() {
                     state.minutes > 0 -> "${state.minutes} 分钟"
                     else -> "刚刚开始"
                 }
-                "正在记录本次充电" to
-                    "已充 $elapsed$avg，电量 ${state.level}%"
+                "正在充电" to "已记录 $elapsed$avg"
             }
 
             RecorderState.Idle -> return null
         }
+
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_charge)
@@ -179,11 +195,14 @@ class ChargeRecordService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         when (state) {
-            is RecorderState.Recording -> builder.addAction(
-                0,
-                "结束并保存",
-                serviceIntent(ACTION_STOP, STOP_REQUEST),
-            )
+            is RecorderState.Recording -> {
+                builder.addAction(
+                    0,
+                    "结束并保存",
+                    serviceIntent(ACTION_STOP, STOP_REQUEST),
+                )
+                applyProgressOrLiveUpdate(builder, state, text)
+            }
 
             is RecorderState.Waiting -> builder.addAction(
                 0,
@@ -194,6 +213,62 @@ class ChargeRecordService : Service() {
             RecorderState.Idle -> Unit
         }
         return builder.build()
+    }
+
+    /**
+     * 「记录中」这条通知：Android 16 起做成实时更新（Live Update），更早的系统退回普通进度条。
+     *
+     * 系统提升成实时更新的条件：ongoing、有 contentTitle、没有 RemoteViews、渠道不是
+     * IMPORTANCE_MIN、清单里声明了 POST_PROMOTED_NOTIFICATIONS，并且显式请求提升。
+     * 这里全部走 NotificationCompat（core 1.18 起带 `ProgressStyle` /
+     * `setRequestPromotedOngoing` / `setShortCriticalText`，内部按版本适配），
+     * 低版本就不会碰到只在 API 36 才有的类。
+     */
+    private fun applyProgressOrLiveUpdate(
+        builder: NotificationCompat.Builder,
+        state: RecorderState.Recording,
+        text: String,
+    ) {
+        val level = state.level.coerceIn(0, 100)
+        if (Build.VERSION.SDK_INT < 36) {
+            // 老系统没有实时更新：电量写回正文，再挂一条普通进度条
+            builder.setContentText("$text，电量 $level%")
+            builder.setProgress(100, level, false)
+            return
+        }
+
+        builder
+            .setStyle(
+                NotificationCompat.ProgressStyle()
+                    // 进度就是电量百分比，总刻度 100
+                    .setProgress(level)
+                    .setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(100)))
+                    .setProgressTrackerIcon(
+                        IconCompat.createWithResource(this, R.drawable.ic_stat_charge),
+                    )
+                    // 让系统按进度决定配色；状态栏胶囊也会跟着走
+                    .setStyledByProgress(true),
+            )
+            // 状态栏胶囊里直接显示充电功率，而不是电量：电量在状态栏本身就有，
+            // 胶囊再重复一遍没有信息量。系统只给 96dp，取一位小数、单位紧跟数字。
+            .setShortCriticalText(powerLabel(state))
+
+        // 用户可能在系统设置里关掉本应用的实时更新：关了就照常发普通常驻通知，
+        // 不请求提升，免得"请求了却显示不出来"
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager?.canPostPromotedNotifications() != false) {
+            builder.setRequestPromotedOngoing(true)
+        }
+    }
+
+    /** 胶囊文案：优先瞬时功率，没有就退回平均值；两者都没有（刚插上还没采到）显示「充电中」 */
+    private fun powerLabel(state: RecorderState.Recording): String {
+        val power = state.lastPowerW ?: state.avgPowerW
+        return if (power != null && power > 0f) {
+            String.format(Locale.US, "%.1fW", power)
+        } else {
+            "充电中"
+        }
     }
 
     private fun serviceIntent(action: String, requestCode: Int): PendingIntent =

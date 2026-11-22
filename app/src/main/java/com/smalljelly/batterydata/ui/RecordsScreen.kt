@@ -1,5 +1,6 @@
 package com.smalljelly.batterydata.ui
 
+import com.haooz.nexioui.overlaydialog.OverlayDialog
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -49,6 +50,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -67,6 +69,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -78,6 +81,9 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -99,26 +105,34 @@ import com.smalljelly.batterydata.data.ChargeRecord
 import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.data.RecorderState
 import com.smalljelly.batterydata.data.UiDiagnostics
-import com.smalljelly.batterydata.ui.components.GlassAddButton
-import com.smalljelly.batterydata.ui.components.GlassMoreButton
-import com.smalljelly.batterydata.ui.components.GlassMoreButtonSize
 import com.smalljelly.batterydata.ui.components.ManualCapacityDialog
-import com.smalljelly.batterydata.ui.components.MoreMenuOverlay
-import com.smalljelly.batterydata.ui.components.PageTopBar
-import com.smalljelly.batterydata.ui.components.rememberTopBarCollapseProgress
+import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.TopBarActionSize
+import com.smalljelly.batterydata.ui.components.menuDropdownColors
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
 import com.smalljelly.batterydata.ui.components.capacityText
 import com.smalljelly.batterydata.ui.components.designSourceSuffix
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
-import com.smalljelly.batterydata.ui.components.rememberTopBarMaterialAlpha
 import com.smalljelly.batterydata.ui.components.rememberTopBarPull
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import com.haooz.nexioui.button.ButtonDefaults
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.smalljelly.batterydata.ui.components.reportPressTo
+import com.haooz.nexioui.dropdown.DropdownEntry
+import com.haooz.nexioui.dropdown.DropdownItem
+import com.haooz.nexioui.dropdown.DropdownMaskMode
+import com.haooz.nexioui.dropdown.DropdownPanelDragSelectState
+import com.haooz.nexioui.dropdown.OverlayDropdownPopup
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.scaffold.Scaffold
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.button.FlatTextButton
+import com.haooz.nexioui.theme.NexioTheme
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.More
+import com.smalljelly.batterydata.ui.components.materialGlassColor
+import com.smalljelly.batterydata.ui.theme.AppMaterial
+import com.haooz.nexioui.overscroll.overScrollVertical
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -153,9 +167,10 @@ fun RecordsScreen(
     onOpenRecord: (ChargeRecord, Rect, GraphicsLayer) -> Unit,
     onOpenAbout: () -> Unit,
     onModalVisibleChange: (Boolean) -> Unit,
+    onTopBarPressChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val settings = remember { BatterySettings(context.applicationContext) }
     val repository = remember { BatteryRepository(context.applicationContext) }
     var designSample by remember { mutableStateOf(repository.snapshot()) }
@@ -167,12 +182,8 @@ fun RecordsScreen(
     // 看起来就是一层灰条，反而掩盖了"内容根本没到顶栏下面"这个真问题。
     // 拖动位移（短列表的唯一信号）：挂在内层，见 rememberTopBarPull 的注释
     val (pullModifier, pull) = rememberTopBarPull()
-    val topBarAlpha = rememberTopBarMaterialAlpha(listState, pull)
-    // 大标题收起进度：只看列表自己的滚动量。首项已经不是第 0 条时直接给满，
-    // 免得 index>0 之后偏移归零、大标题又"弹"回来。
-    val collapseProgress = rememberTopBarCollapseProgress {
-        if (listState.firstVisibleItemIndex > 0) 10_000 else listState.firstVisibleItemScrollOffset
-    }
+    // 顶栏：折叠 / 材质由库的 CollapsibleTopAppBar 负责，这里只建一份共享状态
+    val topBarState = rememberNexioTopBarState()
     val backdrop = rememberLayerBackdrop()
     val pageBackdrop = rememberLayerBackdrop()
 
@@ -180,13 +191,49 @@ fun RecordsScreen(
 
     // menuOpen 由容器层持有：菜单展开时底栏依然能点，点它就先收菜单再切页
     var menuMounted by remember { mutableStateOf(false) }
+    // 页面三点钮的过渡态：true=进入隐藏方向，false=面板已退场、按钮正常显示
+    var menuIconHidden by remember { mutableStateOf(false) }
+    var menuFraction by remember { mutableFloatStateOf(0f) }
     var openAboutAfterMenu by remember { mutableStateOf(false) }
     var openCapacityAfterMenu by remember { mutableStateOf(false) }
-    var menuAnchorRightPx by remember { mutableStateOf(0f) }
-    var menuAnchorTopPx by remember { mutableStateOf(0f) }
     var showManualCapacityDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(menuOpen) { if (menuOpen) menuMounted = true }
+    // 菜单条目：点击先收菜单，等收起动画播完再切页 / 弹对话框
+    val currentOnMenuOpenChange by rememberUpdatedState(onMenuOpenChange)
+    val menuEntry = remember {
+        DropdownEntry(
+            items = listOf(
+                DropdownItem(
+                    text = "关于",
+                    onClick = {
+                        openAboutAfterMenu = true
+                        currentOnMenuOpenChange(false)
+                    },
+                ),
+                DropdownItem(
+                    text = "手动设置电池容量",
+                    onClick = {
+                        openCapacityAfterMenu = true
+                        currentOnMenuOpenChange(false)
+                    },
+                ),
+            ),
+        )
+    }
+    // 下拉收起态就是这颗按钮：库按这个尺寸把面板缩回触发区
+    val menuButtonSize = remember(density) {
+        val px = with(density) { TopBarActionSize.roundToPx() }
+        IntSize(px, px)
+    }
+
+    // 展开即进入淡出方向：f=0 时按钮仍可见（与浮层收起态重合），随 fraction 迅速淡出，
+    // 不空帧、玻璃采到的残留也是淡出中的（同 NexioSchedule / 首页）
+    LaunchedEffect(menuOpen) {
+        if (menuOpen) {
+            menuMounted = true
+            menuIconHidden = true
+        }
+    }
 
     // 多选删除：长按卡片进入选择态，底部换成只有「删除」的悬浮操作栏
     var selectionMode by remember { mutableStateOf(false) }
@@ -264,7 +311,8 @@ fun RecordsScreen(
     val busy = recording != null || waiting != null
 
     SoftGlassTheme(
-        level = GlassMaterialLevel.FROSTED,
+        // 材质档跟关于页的设置走：柔和/液态/磨砂/关闭
+        level = AppMaterial.current.glassLevel,
         isDark = isSystemInDarkTheme(),
         hasWallpaper = false,
     ) {
@@ -272,56 +320,99 @@ fun RecordsScreen(
             Scaffold(
                 modifier = Modifier.layerBackdrop(pageBackdrop),
                 topBar = {
-                    // 固定高度顶栏：高度不折叠，列表让位是常数，栏下不会留出空白
-                    PageTopBar(
+                    // 顶栏：库的 CollapsibleTopAppBar（大标题折叠）+ 渐进模糊带
+                    NexioTopBar(
+                        state = topBarState,
                         title = "记录",
                         largeTitle = "充电记录",
-                        collapseProgress = collapseProgress,
-                        subtitle = when {
-                            selectionMode -> "已选择 ${selectedIds.size} 条"
-                            waiting != null -> "等待接入充电器"
-                            recording != null -> "正在记录本次充电"
-                            records.isEmpty() -> "点开始记录，记一次完整的充电"
-                            else -> "共 ${records.size} 条记录"
-                        },
                         backdrop = backdrop,
-                        materialAlpha = topBarAlpha,
-                        page = "records",
-                        // 自检模式下把现场数字印在红框左上角
-                        debugInfo = {
-                            "i=${listState.firstVisibleItemIndex} " +
-                                "o=${listState.firstVisibleItemScrollOffset}"
-                        },
-                        actions = {
+                        actions = { backdropAlpha, shadowAlpha ->
                             // 空态自己有大按钮；正在记录 / 选择态时也不该再开一条
                             if (!busy && !selectionMode && records.isNotEmpty()) {
-                                GlassAddButton(
-                                    backdrop = backdrop,
-                                    materialAlpha = topBarAlpha,
+                                NexioIconButton(
                                     onClick = { startRecording() },
+                                    backdrop = backdrop,
+                                    icon = MiuixIcons.Add,
+                                    contentDescription = "开始记录",
+                                    backdropAlpha = backdropAlpha,
+                                    shadowAlpha = shadowAlpha,
+                                    iconTint = colors.onBackground,
+                                    modifier = Modifier.reportPressTo(onTopBarPressChange),
                                 )
                             }
                             // 选择态只留顶部标题，操作都在底部那条删除栏里
-                            if (!selectionMode) Box(
-                                Modifier.onGloballyPositioned {
-                                    val rect = it.boundsInRoot()
-                                    menuAnchorRightPx = rect.right
-                                    menuAnchorTopPx = rect.top
-                                },
-                            ) {
-                                if (menuMounted) {
-                                    // 展开期间圆按钮由浮层自己画（形变起点就是它），这里只占位
-                                    Spacer(Modifier.size(GlassMoreButtonSize))
-                                } else {
-                                    GlassMoreButton(
-                                        backdrop = backdrop,
-                                        materialAlpha = topBarAlpha,
-                                        onClick = {
-                                            menuMounted = true
-                                            onMenuOpenChange(true)
-                                        },
-                                    )
-                                }
+                            if (!selectionMode) Box {
+                                // 两态玻璃钮 + 延后两帧隐藏（见 menuIconHidden），与首页三点钮同款交接
+                                NexioIconButton(
+                                    onClick = {
+                                        menuMounted = true
+                                        onMenuOpenChange(true)
+                                    },
+                                    backdrop = backdrop,
+                                    icon = MiuixIcons.More,
+                                    contentDescription = "更多",
+                                    backdropAlpha = backdropAlpha,
+                                    shadowAlpha = shadowAlpha,
+                                    iconTint = colors.onBackground,
+                                    enabled = !menuOpen,
+                                    // 展开随 fraction 迅速淡出；退场保持隐藏，onDismissFinished 才回 1
+                                    modifier = Modifier
+                                        .graphicsLayer {
+                                            alpha = if (!menuIconHidden) 1f
+                                                else if (menuOpen) (1f - menuFraction / 0.18f).coerceIn(0f, 1f)
+                                                else 0f
+                                        }
+                                        // 按住/拖这颗按钮期间禁用横滑切页
+                                        .reportPressTo(onTopBarPressChange),
+                                )
+                                // 库的浮层下拉：挂到最外层宿主，落在被采样的 Scaffold 之外
+                                OverlayDropdownPopup(
+                                    entry = menuEntry,
+                                    show = menuOpen,
+                                    onDismiss = { onMenuOpenChange(false) },
+                                    onDismissFinished = {
+                                        menuMounted = false
+                                        menuIconHidden = false
+                                        menuFraction = 0f
+                                        if (openAboutAfterMenu) {
+                                            openAboutAfterMenu = false
+                                            onOpenAbout()
+                                        } else if (openCapacityAfterMenu) {
+                                            openCapacityAfterMenu = false
+                                            showManualCapacityDialog = true
+                                        }
+                                    },
+                                    maxHeight = null,
+                                    dropdownColors = menuDropdownColors(),
+                                    renderInRootScaffold = true,
+                                    collapseOnSelection = false,
+                                    onFractionProgress = { menuFraction = it },
+                                    // 跟手滑选：按住面板上下滑动连续选择
+                                    dragSelectState = remember { DropdownPanelDragSelectState(maskMode = DropdownMaskMode.Sliding) },
+                                    liquidGlassBackdrop = if (AppMaterial.current.panelBlurDp > 0.dp) {
+                                        pageBackdrop
+                                    } else {
+                                        null
+                                    },
+                                    collapseSize = menuButtonSize,
+                                    collapseContent = {
+                                        // 同首页：42dp Box 居中 22dp 图标，与页面按钮逐像素重合，
+                                        // 避免库把裸图标钉在面板右上角导致归位跳动闪烁
+                                        Box(
+                                            modifier = Modifier.size(TopBarActionSize),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = MiuixIcons.More,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(22.dp),
+                                                tint = colors.onBackground,
+                                            )
+                                        }
+                                    },
+                                    anchorOffsetX = 0.dp,
+                                    anchorOffsetY = 0.dp,
+                                )
                             }
                         },
                     )
@@ -372,7 +463,11 @@ fun RecordsScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .layerBackdrop(backdrop),
+                        // 采样层要自带不透明底：layerBackdrop 只录它内层的内容，
+                        // 底色必须写在它**后面**。之前底色在外层，录到的图层全透明 ——
+                        // 顶栏渐进模糊采不到素材，弹窗玻璃也只剩灰板
+                        .layerBackdrop(backdrop)
+                        .background(colors.background),
                 ) {
                     // 列表从屏幕顶端铺到底：顶栏盖在它上面，靠 contentPadding 让开栏高。
                     LazyColumn(
@@ -380,6 +475,9 @@ fun RecordsScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .onSizeChanged { if (it.height != viewportPx) viewportPx = it.height }
+                            // 顶栏折叠 / 材质（按钮两态）的滚动来源：作为 overScrollVertical 的
+                            // 父连接，回弹层会把位移先 dispatch 给它 → 大标题收起、材质淡入
+                            .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
                             // Miuix 自带回弹：内部自带 clipToBounds + 布局期位移，
                             // 且先把位移交给父节点（顶栏），所以不会越界盖住标题、
                             // 也不会吃掉顶栏展开所需的位移
@@ -499,8 +597,10 @@ fun RecordsScreen(
                         EmptyRecords(onStart = { startRecording() })
                     }
                 }
+            }
 
                 if (confirmDelete) {
+                    // NexioUI 的对话框：玻璃、模糊、折射、动画都是库自己的实现
                     OverlayDialog(
                         show = true,
                         title = "删除记录",
@@ -510,8 +610,11 @@ fun RecordsScreen(
                         } else {
                             "确定要删除选中的 ${selectedIds.size} 条记录吗？"
                         },
-                        backgroundColor = colors.surfaceContainer,
+                        // 面板自己采样这一层做模糊，背后页面只压暗
+                        liquidGlassBackdrop = backdrop,
                         onDismissRequest = { confirmDelete = false },
+                        // 挂到最外层 Scaffold 的弹层宿主，才能盖住顶栏 / 底栏
+                        renderInRootScaffold = true,
                     ) {
                         // 参照系统确认弹窗：两个等宽灰底按钮，危险操作标红
                         Row(
@@ -545,6 +648,7 @@ fun RecordsScreen(
                     manualCapacity = settings.manualDesignCapacityMah(),
                     currentDesign = capacityText(designSample.designCapacityMah) +
                         designSourceSuffix(designSample.designSource),
+                    backdrop = backdrop,
                     onSet = { value ->
                         settings.setManualDesignCapacityMah(value)
                         designSample = repository.snapshot()
@@ -552,36 +656,9 @@ fun RecordsScreen(
                     },
                     onDismiss = { showManualCapacityDialog = false },
                 )
-            }
 
-            // 菜单浮层必须放在被采样的 Scaffold 之外，否则采样层会包含采样者（渲染树成环崩溃）
-            if (menuMounted) {
-                MoreMenuOverlay(
-                    show = menuOpen,
-                    anchorRightPx = menuAnchorRightPx,
-                    anchorTopPx = menuAnchorTopPx,
-                    pageBackdrop = pageBackdrop,
-                    onDismiss = { onMenuOpenChange(false) },
-                    onExitFinished = {
-                        menuMounted = false
-                        if (openAboutAfterMenu) {
-                            openAboutAfterMenu = false
-                            onOpenAbout()
-                        } else if (openCapacityAfterMenu) {
-                            openCapacityAfterMenu = false
-                            showManualCapacityDialog = true
-                        }
-                    },
-                    onAbout = {
-                        onMenuOpenChange(false)
-                        openAboutAfterMenu = true
-                    },
-                    onManualCapacity = {
-                        onMenuOpenChange(false)
-                        openCapacityAfterMenu = true
-                    },
-                )
-            }
+            // 菜单已由库的 OverlayDropdownPopup 渲染到窗口弹层（见顶栏 actions），
+            // 这里不再挂第二棵树
 
             // 选择态的悬浮操作栏：照 Nexio 编辑课表页，只留一个「删除」。
             // 放在被采样的 Scaffold 之外才能安全采样 pageBackdrop（底栏玻璃同款）
@@ -619,12 +696,12 @@ private fun DeleteActionPill(
     val dark = isSystemInDarkTheme()
     val shape = remember { ContinuousCapsule() }
     val shapeBlock: () -> Shape = remember(shape) { { shape } }
-    val effectsBlock: GlassEffectScope.() -> Unit = remember { { blur(12.dp.toPx()) } }
-    val glassColor = if (dark) {
-        Color(0xFF242424).copy(alpha = 0.84f)
-    } else {
-        Color(0xFFFAFAFA).copy(alpha = 0.76f)
+    // 悬浮胶囊：和底栏同一套材质参数（液态更透、磨砂更奶白、关闭不模糊）
+    val material = AppMaterial.current
+    val effectsBlock: GlassEffectScope.() -> Unit = remember(material.bottomBlurDp) {
+        { if (material.bottomBlurDp > 0.dp) blur(material.bottomBlurDp.toPx()) }
     }
+    val glassColor = materialGlassColor(dark, material)
     val surfaceBlock: DrawScope.() -> Unit = remember(glassColor) { { drawRect(glassColor) } }
     val contentColor = if (enabled) Color(0xFFE0433C) else Color(0xFF9A9A9A)
 
@@ -649,7 +726,7 @@ private fun DeleteActionPill(
     ) {
         TrashGlyph(color = contentColor)
         Spacer(Modifier.width(8.dp))
-        Text(
+        NexioText(
             text = "删除",
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
@@ -727,7 +804,7 @@ private fun DialogActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Box(
         modifier = modifier
             .height(44.dp)
@@ -740,7 +817,7 @@ private fun DialogActionButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
+        NexioText(
             text = text,
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
@@ -759,7 +836,7 @@ private fun RecordingCard(
     onFinish: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
@@ -770,21 +847,21 @@ private fun RecordingCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                NexioText(
                     text = dateFormat.format(Date(state.startAt)) +
                         " " + timeFormat.format(Date(state.startAt)),
                     fontSize = 15.sp,
                     color = colors.onSurfaceContainer,
                 )
                 Spacer(Modifier.weight(1f))
-                Text(
+                NexioText(
                     text = if (state.minutes > 0) "已充 ${state.minutes} 分钟" else "刚开始",
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariantSummary,
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Text(
+            NexioText(
                 text = "记录中",
                 fontSize = 32.sp,
                 lineHeight = 38.sp,
@@ -792,19 +869,19 @@ private fun RecordingCard(
                 color = colors.primary,
             )
             Spacer(Modifier.height(10.dp))
-            Text(
+            NexioText(
                 text = "${state.fromLevel}% → ${state.level}%",
                 fontSize = 15.sp,
                 color = colors.onSurfaceContainer,
             )
             Spacer(Modifier.height(4.dp))
-            Text(
+            NexioText(
                 text = liveValues(state),
                 fontSize = 13.sp,
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.height(2.dp))
-            Text(
+            NexioText(
                 text = buildString {
                     append("平均 ")
                     append(state.avgPowerW?.let { "${formatOne(it)} W" } ?: "—")
@@ -820,9 +897,9 @@ private fun RecordingCard(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(text = "放弃", onClick = onCancel)
+                FlatTextButton(text = "放弃", onClick = onCancel)
                 Spacer(Modifier.width(8.dp))
-                TextButton(
+                FlatTextButton(
                     text = "结束并保存",
                     colors = ButtonDefaults.textButtonColorsPrimary(),
                     onClick = onFinish,
@@ -835,7 +912,7 @@ private fun RecordingCard(
 /** 等待充电：已经点过开始记录，等充电器插上 */
 @Composable
 private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
@@ -846,20 +923,20 @@ private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                NexioText(
                     text = timeFormat.format(Date(state.since)) + " 开始等待",
                     fontSize = 15.sp,
                     color = colors.onSurfaceContainer,
                 )
                 Spacer(Modifier.weight(1f))
-                Text(
+                NexioText(
                     text = "当前 ${state.level}%",
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariantSummary,
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Text(
+            NexioText(
                 text = "等待充电",
                 fontSize = 32.sp,
                 lineHeight = 38.sp,
@@ -867,14 +944,14 @@ private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
                 color = colors.primary,
             )
             Spacer(Modifier.height(10.dp))
-            Text(
+            NexioText(
                 text = "插上充电器后自动开始记录，拔电时保存这一次的曲线",
                 fontSize = 13.sp,
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(text = "取消", onClick = onCancel)
+                FlatTextButton(text = "取消", onClick = onCancel)
             }
         }
     }
@@ -882,7 +959,7 @@ private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
 
 @Composable
 private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Column(
         // 必须撑满：Column 默认宽度只有内容宽（300dp 的按钮），躺在列表左边缘，
         // 里面的 horizontalAlignment 就没有可居中的余量，整块会贴着左边。
@@ -904,7 +981,7 @@ private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
+            NexioText(
                 text = "开始记录",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Medium,
@@ -912,7 +989,7 @@ private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
             )
         }
         Spacer(Modifier.height(12.dp))
-        Text(
+        NexioText(
             text = "点一下就开始，插上充电器自动记录\n拔电时自动保存这一次的完整过程",
             fontSize = 14.sp,
             lineHeight = 21.sp,
@@ -925,7 +1002,7 @@ private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
 /** 选择态的勾选圈：选中是实心圆 + 白勾，未选中是空心圈 */
 @Composable
 private fun SelectionMark(selected: Boolean) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Box(
         modifier = Modifier
             .size(22.dp)
@@ -1045,7 +1122,7 @@ private fun RecordCard(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     // 位置只写进普通对象，不用 snapshot state：回弹时列表每帧都在动，
     // 用 state 会让所有卡片每帧重组，入场动画随之被反复触发（就是之前"乱"的原因）
     val bounds = remember { CardBounds() }
@@ -1077,7 +1154,7 @@ private fun RecordCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
+                    NexioText(
                         text = dateFormat.format(Date(record.dateMillis)),
                         fontSize = 15.sp,
                         color = colors.onSurfaceContainer,
@@ -1087,7 +1164,7 @@ private fun RecordCard(
                         // 选择态：右上角换成勾选圈（时长让位，退出选择态就回来）
                         SelectionMark(selected = selected)
                     } else {
-                        Text(
+                        NexioText(
                             text = record.durationMinutes?.let { formatDuration(it) } ?: "—",
                             fontSize = 11.sp,
                             color = colors.onSurfaceVariantSummary,
@@ -1095,7 +1172,7 @@ private fun RecordCard(
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(
+                NexioText(
                     text = "${record.fromLevel}~${record.toLevel}%",
                     fontSize = 32.sp,
                     lineHeight = 38.sp,
@@ -1131,15 +1208,15 @@ private fun StatBlock(
     modifier: Modifier = Modifier,
     note: String? = null,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Column(modifier) {
-        Text(text = "$label：", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
+        NexioText(text = "$label：", fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
         Spacer(Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(text = value, fontSize = 15.sp, color = colors.onSurfaceContainer)
+            NexioText(text = value, fontSize = 15.sp, color = colors.onSurfaceContainer)
             if (note != null) {
                 Spacer(Modifier.width(6.dp))
-                Text(
+                NexioText(
                     text = note,
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariantSummary,

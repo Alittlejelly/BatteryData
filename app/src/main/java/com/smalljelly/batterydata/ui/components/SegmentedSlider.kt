@@ -28,8 +28,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.theme.NexioTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -54,7 +54,7 @@ fun SegmentedSlider(
     segmentHeight: Dp = 28.dp,
     fontSize: TextUnit = 12.sp,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val density = LocalDensity.current
     // 每格宽度直接用 dp 换算：轨道宽度就是"格数 × 格宽"，不用再量一次
     val segmentWidthPx = with(density) { segmentWidth.toPx() }
@@ -138,7 +138,7 @@ fun SegmentedSlider(
                     modifier = Modifier.size(segmentWidth, segmentHeight),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
+                    NexioText(
                         text = label,
                         fontSize = fontSize,
                         color = if (index == hoverIndex) {

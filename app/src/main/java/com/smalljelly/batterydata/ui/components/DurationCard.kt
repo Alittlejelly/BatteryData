@@ -10,9 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.theme.NexioTheme
 
 /**
  * 时长预估卡片，位于大电池与实时数据之间。
@@ -26,19 +26,19 @@ fun DurationCard(
     modifier: Modifier = Modifier,
     note: String? = null,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
         insideMargin = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
     ) {
-        Text(
+        NexioText(
             text = label,
             fontSize = 13.sp,
             color = colors.onSurfaceVariantSummary,
         )
         Spacer(Modifier.height(6.dp))
-        Text(
+        NexioText(
             text = value ?: "—",
             fontSize = 22.sp,
             lineHeight = 24.sp,
@@ -47,7 +47,7 @@ fun DurationCard(
         )
         if (note != null) {
             Spacer(Modifier.height(6.dp))
-            Text(
+            NexioText(
                 text = note,
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,

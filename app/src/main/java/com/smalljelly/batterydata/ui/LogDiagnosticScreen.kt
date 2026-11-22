@@ -1,5 +1,6 @@
 package com.smalljelly.batterydata.ui
 
+import com.haooz.nexioui.overlaydialog.OverlayDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,27 +39,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haooz.softglass.backdrop.backdrops.layerBackdrop
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
+import com.smalljelly.batterydata.ui.theme.AppMaterial
 import com.smalljelly.batterydata.data.LogFile
 import com.smalljelly.batterydata.data.LogFileStore
-import com.smalljelly.batterydata.ui.components.GlassBackButton
-import com.smalljelly.batterydata.ui.components.GlassIconButton
-import com.smalljelly.batterydata.ui.components.PageTopBar
+import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
-import com.smalljelly.batterydata.ui.components.rememberTopBarCollapseProgress
-import com.smalljelly.batterydata.ui.components.rememberTopBarMaterialAlpha
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
 import com.smalljelly.batterydata.ui.components.rememberTopBarPull
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.rotate
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.haooz.nexioui.icon.extended.ChevronBackward
 import kotlinx.coroutines.delay
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Delete
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import com.haooz.nexioui.button.Button
+import com.haooz.nexioui.button.ButtonDefaults
+import com.haooz.nexioui.card.Card
+import com.haooz.nexioui.scaffold.Scaffold
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.button.FlatTextButton
+import com.haooz.nexioui.icon.NexioIcons
+import com.haooz.nexioui.icon.extended.Delete
+import com.haooz.nexioui.theme.NexioTheme
+import com.haooz.nexioui.overscroll.overScrollVertical
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,7 +83,7 @@ private const val LiveSampleIntervalMs = 2_000L
 @Composable
 fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
     val context = LocalContext.current
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val store = remember { LogFileStore(context.applicationContext) }
 
     var logs by remember { mutableStateOf<List<LogFile>>(emptyList()) }
@@ -120,37 +125,40 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
 
     val listState = rememberLazyListState()
     // 顶栏材质：与记录页同一口径 —— 停在顶部时没有材质，内容钻进栏下才淡入
-    val (pullModifier, pull) = rememberTopBarPull()
-    val topBarAlpha = rememberTopBarMaterialAlpha(listState, pull)
-    val collapseProgress = rememberTopBarCollapseProgress {
-        if (listState.firstVisibleItemIndex > 0) 10_000 else listState.firstVisibleItemScrollOffset
-    }
+    val (pullModifier, _) = rememberTopBarPull()
+    // 顶栏：折叠 / 材质由库的 CollapsibleTopAppBar 负责
+    val topBarState = rememberNexioTopBarState()
     val backdrop = rememberLayerBackdrop()
     val density = LocalDensity.current
 
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
-            PageTopBar(
+            NexioTopBar(
+                state = topBarState,
                 title = "日志收集",
                 largeTitle = "日志收集",
-                collapseProgress = collapseProgress,
                 backdrop = backdrop,
-                materialAlpha = topBarAlpha,
-                page = "logs",
-                navigation = {
-                    GlassBackButton(
-                        backdrop = backdrop,
+                navigation = { backdropAlpha, shadowAlpha ->
+                    NexioIconButton(
                         onClick = onBack,
-                        materialAlpha = topBarAlpha,
+                        backdrop = backdrop,
+                        icon = NexioIcons.ChevronBackward,
+                        contentDescription = "返回",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
                     )
                 },
-                actions = {
-                    GlassIconButton(
-                        backdrop = backdrop,
-                        imageVector = MiuixIcons.Delete,
-                        contentDescription = "清空日志",
+                actions = { backdropAlpha, shadowAlpha ->
+                    NexioIconButton(
                         onClick = { confirmClear = true },
-                        materialAlpha = topBarAlpha,
+                        backdrop = backdrop,
+                        icon = NexioIcons.Delete,
+                        contentDescription = "清空日志",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
                     )
                 },
             )
@@ -207,14 +215,19 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // 采样源：整块滚动内容（顶栏从这里取模糊素材）
-                .layerBackdrop(backdrop),
+                // 采样源：整块滚动内容（顶栏从这里取模糊素材）。
+                // 底色必须画在采样层里面（layerBackdrop 之后）：layerBackdrop 只录
+                // 它内层的内容，底色在外层时录到的图层全透明，糊带 / 弹窗都采不到东西
+                .layerBackdrop(backdrop)
+                .background(colors.background),
         ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .onSizeChanged { if (it.height != viewportPx) viewportPx = it.height }
+                    // 顶栏折叠 / 材质（按钮两态）的滚动来源，作为回弹层的父连接
+                    .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
                     .overScrollVertical()
                     // 内层才能拿到"列表没消费掉"的增量（回弹位移）
                     .then(pullModifier),
@@ -236,7 +249,7 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
                 }
                 if (logs.isEmpty()) {
                     item {
-                        Text(
+                        NexioText(
                             text = "暂无日志文件",
                             fontSize = 14.sp,
                             color = colors.onSurfaceVariantSummary,
@@ -247,23 +260,33 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
             }
         }
 
-        // ⚠ 对话框必须写在 Scaffold **内容**里：OverlayDialog 只往「最近的 Scaffold」
-        // 的弹窗宿主里塞，宿主由 Scaffold 通过 CompositionLocal 提供、也只在自己的
-        // 布局里渲染。写在 Scaffold 外面就落到了默认的空列表上 —— 对话框永远不出现，
-        // 表现就是"点删除按钮没反应"（连遮罩都没有）。
-        OverlayDialog(
-            show = confirmClear,
-            title = "清空日志",
-            summary = "将删除全部诊断日志文件，此操作不可恢复。",
-            backgroundColor = colors.surfaceContainer,
-            onDismissRequest = { confirmClear = false },
-            renderInRootScaffold = false,
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(text = "取消", onClick = { confirmClear = false })
-                Spacer(Modifier.width(12.dp))
-                TextButton(
+    }
+
+    // 弹窗放在 Scaffold 外面，才能盖住顶栏 / 底栏；模糊发生在面板自己身上，背景只压暗
+    // NexioUI 的对话框：玻璃、模糊、折射、动画都是库自己的实现
+    OverlayDialog(
+        show = confirmClear,
+        title = "清空日志",
+        summary = "将删除全部诊断日志文件，此操作不可恢复。",
+        // 面板自己采样这一层做模糊，背后页面只压暗
+        liquidGlassBackdrop = backdrop,
+        onDismissRequest = { confirmClear = false },
+        // 挂到最外层 Scaffold 的弹层宿主，才能盖住顶栏 / 底栏
+        renderInRootScaffold = true,
+    ) {
+            // 和 NexioUI 自己的对话框一致：等宽按钮、12dp 间距、主操作走主色
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FlatTextButton(
+                    text = "取消",
+                    modifier = Modifier.weight(1f),
+                    onClick = { confirmClear = false },
+                )
+                FlatTextButton(
                     text = "清空",
+                    modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColorsPrimary(),
                     onClick = {
                         // 正在记录的文件也算日志，一起停掉再删
@@ -295,7 +318,7 @@ private fun LogRecordBar(
     recordedSec: Int,
     onToggle: () -> Unit,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val background = colors.background
     val scrim = remember(background) {
         Brush.verticalGradient(
@@ -329,7 +352,7 @@ private fun LogRecordBar(
                 colors = ButtonDefaults.buttonColorsPrimary(),
                 insideMargin = PaddingValues(horizontal = 16.dp),
             ) {
-                Text(
+                NexioText(
                     text = if (recording) "停止记录 · ${formatElapsed(recordedSec)}" else "开始记录日志",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
@@ -347,7 +370,7 @@ private fun formatElapsed(seconds: Int): String {
 
 @Composable
 private fun LogCard(log: LogFile, onClick: () -> Unit) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
@@ -356,27 +379,27 @@ private fun LogCard(log: LogFile, onClick: () -> Unit) {
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                Text(
+                NexioText(
                     text = if (log.name.startsWith("live-")) "实时记录" else "运行日志",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = ColorPrimary,
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
+                NexioText(
                     text = log.name,
                     fontSize = 15.sp,
                     color = colors.onSurfaceContainer,
                 )
                 Spacer(Modifier.height(2.dp))
-                Text(
+                NexioText(
                     text = "Size: ${formatSize(log.sizeBytes)}",
                     fontSize = 12.sp,
                     color = colors.onSurfaceVariantSummary,
                 )
             }
             Spacer(Modifier.width(12.dp))
-            Text(
+            NexioText(
                 text = logTimeFormat.format(Date(log.modifiedMillis)),
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,

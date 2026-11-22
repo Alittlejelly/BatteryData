@@ -67,25 +67,23 @@ import com.haooz.softglass.backdrop.drawBackdrop
 import com.haooz.softglass.backdrop.effects.blur
 import com.smalljelly.batterydata.data.ChargeRecord
 import com.smalljelly.batterydata.data.UiDiagnostics
-import com.smalljelly.batterydata.ui.components.GlassBackButton
-import com.smalljelly.batterydata.ui.components.PageTopBar
-import com.smalljelly.batterydata.ui.components.PageTopBarLargeTitleHeight
+import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.TopBarActionSize
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
 import com.smalljelly.batterydata.ui.components.SegmentedSlider
 import com.smalljelly.batterydata.ui.components.rememberTopBarPull
-import com.smalljelly.batterydata.ui.components.rememberTopBarCollapseProgress
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
-import com.smalljelly.batterydata.ui.components.rememberTopBarMaterialAlpha
 import com.smalljelly.batterydata.ui.theme.BatteryGreen
 import com.smalljelly.batterydata.ui.theme.ChartBlue
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.basic.ArrowRight
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import com.haooz.nexioui.card.Card
+import androidx.compose.material3.Icon
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.haooz.nexioui.scaffold.Scaffold
+import com.haooz.nexioui.text.NexioText
+import com.haooz.nexioui.icon.NexioIcons
+import com.haooz.nexioui.icon.extended.ChevronBackward
+import com.haooz.nexioui.theme.NexioTheme
+import com.haooz.nexioui.overscroll.overScrollVertical
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -113,38 +111,34 @@ fun ChargeDetailScreen(
     record: ChargeRecord,
     onBack: () -> Unit,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     var metric by remember { mutableStateOf(DetailMetric.POWER) }
     val scroll = rememberScrollState()
     // 两路信号取最大：滚过 10dp（内容真的进栏下），或拖动时的回弹位移。
     // 详情页内容常常不足一屏、滚不动，只靠滚动量的话材质永远不会出现。
     val density = LocalDensity.current
-    val (pullModifier, pull) = rememberTopBarPull()
-    val scrollAlpha = rememberTopBarMaterialAlpha({ scroll.value })
-    val pullThresholdPx = with(density) { 8.dp.toPx() }
-    val topBarAlpha: () -> Float = { maxOf(scrollAlpha(), pull.level(pullThresholdPx)) }
+    val (pullModifier, _) = rememberTopBarPull()
     val backdrop = rememberLayerBackdrop()
-    // 大标题收起进度：内容和栏一起滚，滚过大标题块的高度就收完
-    val collapseProgress = rememberTopBarCollapseProgress { scroll.value }
+    // 顶栏：折叠 / 材质由库的 CollapsibleTopAppBar 负责
+    val topBarState = rememberNexioTopBarState()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            PageTopBar(
+            NexioTopBar(
+                state = topBarState,
                 title = "充电详情",
                 largeTitle = "充电详情",
-                collapseProgress = collapseProgress,
-                subtitle = detailDateFormat.format(Date(record.dateMillis)),
                 backdrop = backdrop,
-                materialAlpha = topBarAlpha,
-                page = "detail",
-                // 返回键比 Miuix 默认的 16dp 再往右一点，和标题块的视觉重心对齐
-                startPadding = 24.dp,
-                navigation = {
-                    GlassBackButton(
-                        backdrop = backdrop,
+                navigation = { backdropAlpha, shadowAlpha ->
+                    NexioIconButton(
                         onClick = onBack,
-                        materialAlpha = topBarAlpha,
+                        backdrop = backdrop,
+                        icon = NexioIcons.ChevronBackward,
+                        contentDescription = "返回",
+                        backdropAlpha = backdropAlpha,
+                        shadowAlpha = shadowAlpha,
+                        iconTint = colors.onBackground,
                     )
                 },
             )
@@ -166,8 +160,10 @@ fun ChargeDetailScreen(
             WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().toPx()
         }
         val tailPx = with(density) { DetailTailSpace.toPx() }
-        // 大标题收起所需的行程：和 rememberTopBarCollapseProgress 用的是同一个距离
-        val travelPx = with(density) { (PageTopBarLargeTitleHeight + 8.dp).toPx() }
+        // 大标题收起所需的行程：展开态比折叠态多出来的那段（测量值，未测到时按 62dp）
+        val largeTitlePx = topBarState.largeTitleHeightPx.takeIf { it > 0f }
+            ?: with(density) { 62.dp.toPx() }
+        val travelPx = largeTitlePx + with(density) { 8.dp.toPx() }
 
         var viewportPx by remember { mutableIntStateOf(0) }
         var contentPx by remember { mutableIntStateOf(0) }
@@ -188,8 +184,13 @@ fun ChargeDetailScreen(
                 .fillMaxSize()
                 // 量视口：这里的尺寸就是滚动容器的可视高度
                 .onSizeChanged { if (it.height != viewportPx) viewportPx = it.height }
-                // 采样源是整块滚动内容，原点就是屏幕左上角，和顶栏 1:1 对齐
+                // 采样源是整块滚动内容，原点就是屏幕左上角，和顶栏 1:1 对齐。
+                // 底色必须画在采样层里面（layerBackdrop 之后）：只录到卡片、其余全透明时，
+                // 顶栏渐进模糊的 AGSL 会把透明采样全部丢弃，糊带等于没画
                 .layerBackdrop(backdrop)
+                .background(colors.background)
+                // 顶栏折叠 / 材质（按钮两态）的滚动来源，作为回弹层的父连接
+                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
                 .overScrollVertical()
                 // 内层才能拿到"列表没消费掉"的增量（回弹位移）
                 .then(pullModifier)
@@ -224,27 +225,27 @@ private val DetailTailSpace = 24.dp
 
 @Composable
 private fun SummaryCard(record: ChargeRecord) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
         insideMargin = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
+            NexioText(
                 text = detailDateOnlyFormat.format(Date(record.dateMillis)),
                 fontSize = 13.sp,
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.weight(1f))
-            Text(
+            NexioText(
                 text = "全程记录",
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,
             )
         }
         Spacer(Modifier.height(6.dp))
-        Text(
+        NexioText(
             text = "${record.fromLevel}~${record.toLevel}%",
             fontSize = 40.sp,
             lineHeight = 46.sp,
@@ -252,7 +253,7 @@ private fun SummaryCard(record: ChargeRecord) {
             color = colors.onSurfaceContainer,
         )
         Spacer(Modifier.height(4.dp))
-        Text(
+        NexioText(
             text = detailDateFormat.format(Date(record.dateMillis)) + " 开始充电",
             fontSize = 12.sp,
             color = colors.onSurfaceVariantSummary,
@@ -300,11 +301,11 @@ private fun SummaryCard(record: ChargeRecord) {
 
 @Composable
 private fun MetricBlock(label: String, value: String, modifier: Modifier = Modifier) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     Column(modifier) {
-        Text(text = label, fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
+        NexioText(text = label, fontSize = 12.sp, color = colors.onSurfaceVariantSummary)
         Spacer(Modifier.height(4.dp))
-        Text(text = value, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.onSurfaceContainer)
+        NexioText(text = value, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.onSurfaceContainer)
     }
 }
 
@@ -314,7 +315,7 @@ private fun CurveCard(
     metric: DetailMetric,
     onSelectMetric: (DetailMetric) -> Unit,
 ) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val values = when (metric) {
         DetailMetric.POWER -> record.powerSeries
         DetailMetric.CURRENT -> record.currentSeries
@@ -331,9 +332,9 @@ private fun CurveCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
+            NexioText(
                 text = "充电曲线",
-                style = MiuixTheme.textStyles.title3,
+                style = NexioTheme.textStyles.title3,
                 color = colors.onSurfaceContainer,
             )
             MetricSegments(selected = metric, onSelect = onSelectMetric)
@@ -349,7 +350,7 @@ private fun CurveCard(
                     .background(metric.accent),
             )
             Spacer(Modifier.width(6.dp))
-            Text(
+            NexioText(
                 text = when (metric) {
                     DetailMetric.POWER -> "充电功率"
                     DetailMetric.CURRENT -> "充电电流"
@@ -359,7 +360,7 @@ private fun CurveCard(
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.weight(1f))
-            Text(
+            NexioText(
                 text = if (values.isEmpty()) "无数据" else "${values.size} 个采样点",
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,
@@ -375,7 +376,7 @@ private fun CurveCard(
                     .height(150.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
+                NexioText(
                     text = "这条记录没有曲线数据",
                     fontSize = 13.sp,
                     color = colors.onSurfaceVariantSummary,
@@ -386,8 +387,8 @@ private fun CurveCard(
             DetailChart(values = values, metric = metric)
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("开始", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
-                Text("结束", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
+                NexioText("开始", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
+                NexioText("结束", fontSize = 11.sp, color = colors.onSurfaceVariantSummary)
             }
         }
     }
@@ -405,7 +406,7 @@ private fun MetricSegments(selected: DetailMetric, onSelect: (DetailMetric) -> U
 
 @Composable
 private fun DetailChart(values: List<Float>, metric: DetailMetric) {
-    val colors = MiuixTheme.colorScheme
+    val colors = NexioTheme.colorScheme
     val range = remember(values, metric) { computeRange(values, metric) }
     val gridColor = colors.dividerLine
 
@@ -488,7 +489,7 @@ private fun DetailChart(values: List<Float>, metric: DetailMetric) {
 
 @Composable
 private fun AxisLabel(text: String, color: Color) {
-    Text(text = text, fontSize = 11.sp, color = color)
+    NexioText(text = text, fontSize = 11.sp, color = color)
 }
 
 private fun computeRange(values: List<Float>, metric: DetailMetric): Pair<Float, Float> {

@@ -1,6 +1,9 @@
 [versions]
 agp = "9.4.1"
 coreKtx = "1.10.1"
+# 只升 core（不是 core-ktx）：1.18 才带 NotificationCompat 的实时更新 API
+# （setRequestPromotedOngoing / ProgressStyle / setShortCriticalText）
+androidxCore = "1.18.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
@@ -8,14 +11,24 @@ lifecycleRuntimeKtx = "2.6.1"
 activityCompose = "1.13.0"
 kotlin = "2.4.20"
 composeBom = "2026.02.01"
+nexioui = "0.1.1"
+softglass = "0.1.3"
 miuix = "0.9.4"
-softglass = "0.1.2"
+shizuku = "13.1.5"
 
 [libraries]
+nexioui = { group = "com.github.HaoZai000.NexioUI", name = "nexioui", version.ref = "nexioui" }
+# 只为「手动容量」输入框：NexioUI 的 TextField 没有 keyboardOptions，数字键盘起不来
 miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui-android", version.ref = "miuix" }
+# NexioUI 的图标集不含清单/电池这类通用图标，缺的从 miuix 图标集补
 miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
-softglass = { group = "com.github.HaoZai000.softglass", name = "softglass", version.ref = "softglass" }
+# 必须和 NexioUI 依赖的 softglass 用同一个坐标（它要 0.1.3），否则 classpath 上会出现两份同名类
+softglass = { group = "com.github.HaoZai000.SoftGlass", name = "softglass", version.ref = "softglass" }
+# Shizuku 免 Root 高权限框架：小米超级岛通知需要 bypass XMSF 网络限制
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-core = { group = "androidx.core", name = "core", version.ref = "androidxCore" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
