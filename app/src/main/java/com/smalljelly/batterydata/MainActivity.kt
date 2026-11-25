@@ -27,6 +27,8 @@ class MainActivity : ComponentActivity() {
         )
         // 恢复上次没记完的充电过程（进程被杀 / 手机重启后也能接着记）
         ChargeRecorder.ensure(this)
+        // 排期充电触发 job：进程被杀后下次插电由系统拉起复活超级岛（见 ChargeKeepAliveJobService）
+        com.smalljelly.batterydata.data.ChargeKeepAliveJobService.schedule(this)
         // Shizuku / 超级岛：绑定高权限服务（超级岛通知 bypass XMSF 网络用）
         com.smalljelly.batterydata.island.BatteryIslandHelper.init(this)
         setContent {

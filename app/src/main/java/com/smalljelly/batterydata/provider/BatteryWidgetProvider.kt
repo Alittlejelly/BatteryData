@@ -37,16 +37,27 @@ import kotlin.math.roundToInt
  *
  * ```xml
  * <ContentProviderBinder name="getBattery" uri="content://com.smalljelly.batterydata.widget/live"
- *     columns="level,status_text,power_w,temperature_w,eta_text" countName="hasBattery">
- *     <Variable name="_level"    type="int"    column="level" />
- *     <Variable name="_status"   type="string" column="status_text" />
+ *     columns="installed,is_charging,power_w,temperature_c,health_percent,eta_text,voltage_v,current_a"
+ *     countName="hasBattery">
+ *     <Variable name="_installed" type="int"    column="installed" />
+ *     <Variable name="_charging"  type="int"    column="is_charging" />
+ *     <Variable name="_power"     type="float"  column="power_w" />
+ *     <Variable name="_temp"      type="float"  column="temperature_c" />
+ *     <Variable name="_health"    type="int"    column="health_percent" />
+ *     <Variable name="_eta"       type="string" column="eta_text" />
+ *     <Variable name="_volt"      type="float"  column="voltage_v" />
+ *     <Variable name="_curr"      type="float"  column="current_a" />
  * </ContentProviderBinder>
  * ```
  *
  * 约定（和小部件表达式配合，别轻易改）：
- * - **数值列一律是 Int / Long，不是 Float**。`MatrixCursor.getInt()` 遇到 Float 会抛
- *   `ClassCastException`，而小部件那边是按 XML 里的 `type="int"` 取值的。
- *   所以小数用「放大整数」：`temperature_x10`=312 表示 31.2℃，`power_x100`=1860 表示 18.6W。
+ * - **列类型必须和 XML 里的 `type` 一致**：按 `type="int"` 取 Float 值会抛
+ *   `ClassCastException`。所以每个小数提供两套列：
+ *   「放大整数」配 `type="int"`：`temperature_x10`=312 表示 31.2℃，`power_x100`=1860 表示 18.6W；
+ *   「两位小数 Float」配 `type="float"`：`power_w`、`voltage_v`、`current_a`、`temperature_c`，
+ *   已四舍五入到两位小数，可直接显示。`current_a` 带符号（充电为正），`power_w` 是绝对值。
+ * - **布尔一律用 0/1 整数列**（`is_charging`、`is_plugged`、`installed` 等），配 `type="int"`，
+ *   表达式里 `#x==1` 当 bool 用；不要往 MatrixCursor 里塞 Boolean，跨进程游标不一定支持。
  * - **没有数据不给 null**，给 0 或空串，小部件用 `ifelse(#x==0,'--',...)` 判空即可。
  * - 只支持全表查询：`selection` / `selectionArgs` / `sortOrder` 一律忽略（记录本来就不多）。
  */
@@ -116,11 +127,15 @@ class BatteryWidgetProvider : ContentProvider() {
 
     // ------------------------------------------------------------------ 行构造
 
+    /** 四舍五入保留两位小数，供 `type="float"` 的小部件变量直接显示。 */
+    private fun round2(value: Float): Float = (value * 100f).roundToInt() / 100f
+
     private fun liveRow(s: BatterySample): Map<String, Any> {
         val currentMa = s.currentMa ?: 0f
         val powerW = s.powerW ?: 0f
         val eta = s.etaMinutes
         return mapOf(
+            COL_INSTALLED to 1,
             COL_LEVEL to s.level,
             COL_STATUS to s.status,
             COL_STATUS_TEXT to s.statusText,
@@ -130,12 +145,16 @@ class BatteryWidgetProvider : ContentProvider() {
             COL_IS_PLUGGED to if (s.isPlugged) 1 else 0,
             COL_VOLTAGE_MV to s.voltageMv,
             COL_VOLTAGE_X100 to (s.voltageMv / 10f).roundToInt(),
+            COL_VOLTAGE_V to round2(s.voltageMv / 1000f),
             COL_CURRENT_MA to currentMa.roundToInt(),
             COL_CURRENT_X10 to (abs(currentMa) / 100f).roundToInt(),
             COL_CURRENT_SIGNED to if (currentMa >= 0f) 1 else 0,
+            COL_CURRENT_A to round2(currentMa / 1000f),
             COL_POWER_X100 to (abs(powerW) * 100f).roundToInt(),
+            COL_POWER_W to round2(abs(powerW)),
             COL_POWER_TEXT to if (powerW > 0f) String.format(Locale.CHINA, "%.1f", powerW) else "",
             COL_TEMPERATURE_X10 to ((s.temperatureC ?: 0f) * 10f).roundToInt(),
+            COL_TEMPERATURE_C to round2(s.temperatureC ?: 0f),
             COL_TEMPERATURE_TEXT to (s.temperatureC?.let { String.format(Locale.CHINA, "%.1f", it) } ?: ""),
             COL_TECHNOLOGY to s.technology,
             COL_CHARGE_COUNTER to (s.chargeCounterMah ?: 0f).roundToInt(),
@@ -245,6 +264,7 @@ class BatteryWidgetProvider : ContentProvider() {
         private fun dateFormat(): SimpleDateFormat = SimpleDateFormat("M月d日 HH:mm", Locale.CHINA)
 
         // —— /live：当前状态 ——
+        const val COL_INSTALLED = "installed"               // int  恒为 1，小部件用来判断 App 是否已安装
         const val COL_LEVEL = "level"                       // int  0..100
         const val COL_STATUS = "status"                     // int  BatteryManager.STATUS_*
         const val COL_STATUS_TEXT = "status_text"           // string 充电中/放电中/已充满…
@@ -254,12 +274,16 @@ class BatteryWidgetProvider : ContentProvider() {
         const val COL_IS_PLUGGED = "is_plugged"             // int  0/1
         const val COL_VOLTAGE_MV = "voltage_mv"             // int  mV
         const val COL_VOLTAGE_X100 = "voltage_x100"         // int  0.01V（4200mV → 420）
+        const val COL_VOLTAGE_V = "voltage_v"               // float V，两位小数（4.19）
         const val COL_CURRENT_MA = "current_ma"             // int  mA，充电为正
         const val COL_CURRENT_X10 = "current_x10"           // int  0.1A 绝对值（1860mA → 18）
         const val COL_CURRENT_SIGNED = "current_signed"     // int  1=充电 0=放电
+        const val COL_CURRENT_A = "current_a"               // float A，两位小数，充电为正、放电为负
         const val COL_POWER_X100 = "power_x100"             // int  0.01W 绝对值（1860 → 18.6W）
+        const val COL_POWER_W = "power_w"                   // float W，两位小数，绝对值
         const val COL_POWER_TEXT = "power_text"             // string "18.6"，无数据为 ""
         const val COL_TEMPERATURE_X10 = "temperature_x10"   // int  0.1℃（312 → 31.2℃）
+        const val COL_TEMPERATURE_C = "temperature_c"       // float ℃，两位小数
         const val COL_TEMPERATURE_TEXT = "temperature_text" // string "31.2"
         const val COL_TECHNOLOGY = "technology"             // string Li-ion…
         const val COL_CHARGE_COUNTER = "charge_counter"     // int  mAh 当前电量计数
@@ -299,10 +323,12 @@ class BatteryWidgetProvider : ContentProvider() {
         const val COL_LAST_DATE_TEXT = "last_date_text"     // string
 
         val LIVE_COLUMNS = listOf(
+            COL_INSTALLED,
             COL_LEVEL, COL_STATUS, COL_STATUS_TEXT, COL_PLUGGED, COL_PLUGGED_TEXT,
-            COL_IS_CHARGING, COL_IS_PLUGGED, COL_VOLTAGE_MV, COL_VOLTAGE_X100,
-            COL_CURRENT_MA, COL_CURRENT_X10, COL_CURRENT_SIGNED, COL_POWER_X100, COL_POWER_TEXT,
-            COL_TEMPERATURE_X10, COL_TEMPERATURE_TEXT, COL_TECHNOLOGY,
+            COL_IS_CHARGING, COL_IS_PLUGGED, COL_VOLTAGE_MV, COL_VOLTAGE_X100, COL_VOLTAGE_V,
+            COL_CURRENT_MA, COL_CURRENT_X10, COL_CURRENT_SIGNED, COL_CURRENT_A,
+            COL_POWER_X100, COL_POWER_W, COL_POWER_TEXT,
+            COL_TEMPERATURE_X10, COL_TEMPERATURE_C, COL_TEMPERATURE_TEXT, COL_TECHNOLOGY,
             COL_CHARGE_COUNTER, COL_FULL_CHARGE, COL_DESIGN_CAPACITY,
             COL_HEALTH_PERCENT, COL_HEALTH_TEXT, COL_CYCLE_COUNT,
             COL_ETA_MINUTES, COL_ETA_TEXT, COL_UPDATED_AT,

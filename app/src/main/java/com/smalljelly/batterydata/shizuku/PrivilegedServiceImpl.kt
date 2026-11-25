@@ -20,6 +20,46 @@ class PrivilegedServiceImpl : IPrivilegedService.Stub() {
         private const val TIMEOUT_SECONDS = 3L
     }
 
+    /**
+     * 一键保活白名单（shell 身份执行）：
+     * - Doze 白名单：打盹时广播 / 网络不被冻结，插电复活广播投递更稳；
+     * - RUN_ANY_IN_BACKGROUND / RUN_IN_BACKGROUND：放开后台运行限制。
+     *
+     * 注意：MIUI/HyperOS 上 `appops` 命令可能要求开发者选项里的「USB 调试（安全设置）」
+     * （需登录小米账号），没开时这两条会失败——如实报告，不假装成功。
+     * MIUI 的自启动 / 省电「无限制」是厂商私有策略，AOSP 命令管不到，
+     * 由关于页引导用户去系统设置手动开。
+     */
+    override fun applyKeepAliveWhitelist(packageName: String): String {
+        // binder 参数防注入：只允许包名字符
+        if (!packageName.matches(Regex("[A-Za-z0-9._]+"))) return "无效包名"
+        val commands = listOf(
+            "Doze 白名单" to "dumpsys deviceidle whitelist +$packageName",
+            "后台运行" to "cmd appops set $packageName RUN_ANY_IN_BACKGROUND allow",
+            "后台运行(兼容)" to "cmd appops set $packageName RUN_IN_BACKGROUND allow",
+        )
+        return commands.joinToString("\n") { (label, cmd) -> "$label: ${runOne(cmd)}" }
+    }
+
+    private fun runOne(command: String): String = try {
+        val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+        // 先读干输出再 wait，避免管道写满阻塞；输出都很短
+        val out = process.inputStream.bufferedReader().readText()
+        val err = process.errorStream.bufferedReader().readText()
+        val finished = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        when {
+            !finished -> {
+                process.destroyForcibly()
+                "超时"
+            }
+            process.exitValue() == 0 -> "成功"
+            else -> "失败(${process.exitValue()}) ${(err + out).trim().take(120)}"
+        }
+    } catch (e: Exception) {
+        Log.e(TAG, "runOne failed: $command", e)
+        "失败: ${e.message}"
+    }
+
     override fun setPackageNetworkingEnabled(uid: Int, enabled: Boolean): Boolean {
         return try {
             val serviceManagerClass = Class.forName("android.os.ServiceManager")

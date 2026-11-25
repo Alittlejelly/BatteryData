@@ -1,15 +1,22 @@
 package com.smalljelly.batterydata.ui
 
 import com.haooz.nexioui.overlaydialog.OverlayDialog
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -43,14 +50,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -61,14 +74,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smalljelly.batterydata.R
 import com.smalljelly.batterydata.data.ApkUpdater
+import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.island.BatteryIslandHelper
 import com.smalljelly.batterydata.shizuku.ShizukuManager
 import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.data.UpdateChecker
+import com.smalljelly.batterydata.ui.components.NexioIconButton
+import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.menuDropdownColors
+import com.smalljelly.batterydata.ui.components.pageTopBarHeight
+import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
+import com.smalljelly.batterydata.ui.components.rememberTopBarPull
 import java.io.File
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.haooz.nexioui.button.Button
 import com.haooz.nexioui.button.ButtonDefaults
 import com.haooz.nexioui.card.Card
@@ -84,6 +106,7 @@ import com.haooz.nexioui.icon.basic.ArrowRight
 import com.haooz.nexioui.icon.basic.Check
 import com.haooz.nexioui.theme.NexioTheme
 import com.haooz.nexioui.icon.basic.ArrowUpDown
+import com.haooz.nexioui.overscroll.overScrollVertical
 import com.haooz.nexioui.dropdown.DropdownColors
 import com.haooz.nexioui.dropdown.DropdownDefaults
 import com.haooz.nexioui.dropdown.DropdownEntry
@@ -196,55 +219,111 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
     val islandSupported = remember { BatteryIslandHelper.isIslandSupported(context) }
     var islandEnabled by remember { mutableStateOf(settings.islandEnabled()) }
 
+    // 后台保活：电池优化白名单状态（系统可读）。从设置页返回时刷新，
+    // 避免用户刚授权回来卡片还显示"未忽略"
+    val powerManager = remember {
+        context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    }
+    var ignoringBattery by remember {
+        mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoringBattery =
+                    powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // 下拉面板的玻璃素材：本页内容层（自带不透明底）
     val backdrop = rememberLayerBackdrop()
+    // 折叠顶栏：大标题随滚动收成小标题，内容层同时驱动顶栏材质与折叠
+    val topBarState = rememberNexioTopBarState()
+    val (pullModifier, _) = rememberTopBarPull()
 
     Scaffold(
+        topBar = {
+            NexioTopBar(
+                state = topBarState,
+                title = "关于电池数据",
+                largeTitle = "关于电池数据",
+                backdrop = backdrop,
+                navigation = { backdropAlpha, shadowAlpha ->
+                    // 圆形玻璃钮旋转 180° 当返回箭头用（图标本身不支持下旋转参数）
+                    Box(Modifier.rotate(180f)) {
+                        NexioIconButton(
+                            onClick = onBack,
+                            backdrop = backdrop,
+                            icon = NexioIcons.Basic.ArrowRight,
+                            contentDescription = "返回",
+                            backdropAlpha = backdropAlpha,
+                            shadowAlpha = shadowAlpha,
+                            iconTint = colors.onBackground,
+                        )
+                    }
+                },
+            )
+        },
         containerColor = colors.background,
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { _ ->
+    ) { innerPadding ->
+        // 让位 = Scaffold 实测顶栏高度；首帧没量到时退回常数，避免内容顶进顶栏
+        val measuredTop = innerPadding.calculateTopPadding()
+        val contentTopInset =
+            (if (measuredTop > 0.dp) measuredTop else pageTopBarHeight()) + 8.dp
+        val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 // ★ 采样层必须包住页底色：layerBackdrop 只录它**内层**的内容，
-                // 底色写在它前面就被录在图层外 —— 采到的图层除卡片/文字外全透明。
-                // 弹窗玻璃的 coverage 门控把空采样判成"无内容"，面板只剩一块灰板
-                // （关于页几个弹窗的灰块就是这个）；参考 NexioSchedule 的写法：
-                // 先 layerBackdrop 再 background。
+                // 底色写在它前面就被录在图层外 —— 弹窗玻璃会只剩一块灰板。
                 .layerBackdrop(backdrop)
                 .background(colors.background)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .windowInsetsPadding(WindowInsets.navigationBars)
+                // 顶栏折叠 / 材质的滚动来源：作为回弹层的父连接
+                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
+                // 两端弹簧回弹（关掉 foundation 自带 overscrollEffect，避免叠加）
+                .overScrollVertical()
+                // ⚠ 必须在内层：嵌套滚动由内向外派发，内层才拿得到"列表没消费掉"的增量
+                .then(pullModifier)
+                .verticalScroll(rememberScrollState(), overscrollEffect = null)
                 .padding(horizontal = 24.dp),
         ) {
-            Spacer(Modifier.height(6.dp))
-            FlatIconButton(
-                onClick = onBack,
-                modifier = Modifier.offset(x = (-12).dp),
-            ) {
-                Icon(
-                    imageVector = NexioIcons.Basic.ArrowRight,
-                    contentDescription = "返回",
-                    modifier = Modifier
-                        .size(22.dp)
-                        .rotate(180f),
-                    tint = colors.onBackground,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            NexioText(
-                text = "关于电池数据",
-                fontSize = 32.sp,
-                lineHeight = 40.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.onBackground,
-            )
+            // 顶栏盖在内容上，这里只让出栏高；再给 logo 与顶栏留一段间距
+            Spacer(Modifier.height(contentTopInset + 30.dp))
 
-            Spacer(Modifier.weight(1f))
-
-            // 中部：图标 + 名称 + 版本号（整体水平居中）
+            // 应用信息（logo / 名称 / 版本）：
+            // 折叠时**向纵深沉入**（缩放后退 + 淡出），不是沿屏幕平面下移；
+            // 布局高度同步收缩（比淡出稍慢），收完后下面的列表自动吸附到顶栏下方。
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clipToBounds()
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val f = topBarState.scrollBehavior.state.collapsedFraction.coerceIn(0f, 1f)
+                        // 高度按 f⁴ 收缩：f 还小的时候几乎**一点不减**，
+                        // 先把"缩下去 + 淡出"完整放完；只有接近收起时(>0.8)才快速塌陷补位。
+                        // 用 f² 时刚滚一点点就会裁掉底部（版本号被切一半就是这个原因）。
+                        val shrink = f * f * f * f
+                        val visible = (placeable.height * (1f - shrink)).roundToInt().coerceAtLeast(0)
+                        layout(placeable.width, visible) {
+                            placeable.place(0, 0)
+                        }
+                    }
+                    .graphicsLayer {
+                        val f = topBarState.scrollBehavior.state.collapsedFraction.coerceIn(0f, 1f)
+                        // 往屏幕里退：整体缩小 + 淡出
+                        val s = 1f - 0.3f * f
+                        scaleX = s
+                        scaleY = s
+                        alpha = 1f - f
+                        transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 AppIcon(size = 96.dp)
@@ -262,8 +341,7 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                     color = colors.onSurfaceVariantSummary,
                 )
             }
-
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(24.dp))
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -697,10 +775,107 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                         onCheckedChange = {
                             islandEnabled = it
                             settings.setIslandEnabled(it)
-                            if (!it) BatteryIslandHelper.cancel(context)
+                            if (!it) {
+                                BatteryIslandHelper.cancel(context)
+                            } else {
+                                // 开着岛且正插着电：立刻挂上保活服务，不等下次插电
+                                ChargeRecorder.ensure(context.applicationContext)
+                                // 排期充电 job：进程被杀后下次插电自动复活岛
+                                com.smalljelly.batterydata.data.ChargeKeepAliveJobService.schedule(context.applicationContext)
+                            }
                         },
                         enabled = islandSupported,
                     )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            // 后台保活：岛模式前台服务已兜住"充电时进程不死"，这里引导用户配好
+            // HyperOS 的系统白名单，降低划后台被杀的概率（厂商策略只能引导，代码管不到）
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 20.dp,
+                insideMargin = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    NexioText(
+                        text = "后台保活",
+                        fontSize = 16.sp,
+                        color = colors.onSurfaceContainer,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    NexioText(
+                        text = "超级岛靠进程活着持续刷新：插电时自动挂前台服务（充电不费电），拔电即停；被杀后下次插电自动恢复。HyperOS 划掉后台仍可能杀进程，建议配好下面的系统白名单。",
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = colors.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        NexioText(
+                            text = "忽略电池优化",
+                            fontSize = 14.sp,
+                            color = colors.onSurfaceContainer,
+                        )
+                        NexioText(
+                            text = if (ignoringBattery) "已忽略" else "未忽略",
+                            fontSize = 14.sp,
+                            color = if (ignoringBattery) Color(0xFF4CAF50) else Color(0xFFFFB347),
+                        )
+                    }
+                    if (!ignoringBattery) {
+                        Spacer(Modifier.height(8.dp))
+                        FlatTextButton(
+                            text = "请求忽略电池优化",
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(
+                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:${context.packageName}"),
+                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FlatTextButton(
+                        text = "自启动 / 省电策略设置",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { openAutoStartSettings(context) },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    NexioText(
+                        text = "在打开的页面里允许自启动、省电策略选「无限制」；再到最近任务里长按本应用卡片加锁，划后台才不掉岛。",
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = colors.onSurfaceVariantSummary,
+                    )
+                    if (shizukuRunning.value && shizukuAuthorized.value) {
+                        Spacer(Modifier.height(8.dp))
+                        FlatTextButton(
+                            text = "一键加入系统白名单（Shizuku）",
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        ShizukuManager.applyKeepAliveWhitelist(context.applicationContext)
+                                    }
+                                    Toast.makeText(
+                                        context,
+                                        result ?: "Shizuku 不可用",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            },
+                        )
+                    }
                 }
             }
 
@@ -713,7 +888,8 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(20.dp))
+            // 底部留白延伸到导航栏下方：内容可沉浸滚到屏幕底，末项又能停在栏上
+            Spacer(Modifier.height(navBottom + 20.dp))
         }
 
         // 弹窗面板自己采样这层背景做模糊，整页保持清晰（只压暗，不糊）
@@ -987,4 +1163,30 @@ private fun AppIcon(size: Dp) {
             .size(size)
             .clip(RoundedCornerShape(size * 0.24f)),
     )
+}
+
+/**
+ * 打开 MIUI/HyperOS 的自启动管理页（省电策略「无限制」也在附近的应用信息里）。
+ * 厂商页面各版本组件名可能变，逐个尝试，最后兜底系统应用详情页。
+ */
+private fun openAutoStartSettings(context: Context) {
+    val candidates = listOf(
+        Intent().setComponent(
+            ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+        ),
+        Intent("miui.intent.action.OP_AUTO_START"),
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null),
+        ),
+    )
+    for (intent in candidates) {
+        val opened = runCatching {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+        if (opened) return
+    }
 }

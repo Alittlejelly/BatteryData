@@ -22,6 +22,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -587,14 +590,36 @@ fun RecordsScreen(
                 // 的可用区域，让按钮和说明文字在**屏幕垂直方向**也居中。
                 // 空态时列表里本来就没有条目，覆盖在上面不会有遮挡。
                 if (records.isEmpty() && !busy) {
-                    Box(
+                    // 空态也要能真滚动、顶栏可收可放：用 verticalScroll（不是 scrollable）
+                    // 复用列表那套「顶栏 → 回弹 → 下拉位移」链。scrollable 只接管手势、
+                    // 滚动范围恒为 0，增量派发不完整 —— 表现为没有回弹、收起大标题后
+                    // 展开增量到不了顶栏的 onPostScroll，再也回不到大标题。
+                    // 这里照充电详情页的范式：居中块高度 = 视口 - 顶栏让位 - 底栏留白，
+                    // 按钮在可视区垂直居中；底部再补一段「刚好收完大标题」的行程，
+                    // 短内容也有真实滚动范围，大标题可收可放、两端弹簧回弹。
+                    val emptyAreaPx = (viewportPx - insetPx - baseBottomPx).coerceAtLeast(0)
+                    val largeTitlePx = topBarState.largeTitleHeightPx.takeIf { it > 0f }
+                        ?: with(density) { 62.dp.toPx() }
+                    val travelPx = largeTitlePx + with(density) { 8.dp.toPx() }
+                    Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(top = contentTopInset, bottom = baseBottom)
+                            .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
+                            .overScrollVertical()
+                            .then(pullModifier)
+                            .verticalScroll(rememberScrollState(), overscrollEffect = null)
                             .padding(horizontal = 16.dp),
-                        contentAlignment = Alignment.Center,
                     ) {
-                        EmptyRecords(onStart = { startRecording() })
+                        Spacer(Modifier.height(contentTopInset))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(with(density) { emptyAreaPx.toDp() }),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            EmptyRecords(onStart = { startRecording() })
+                        }
+                        Spacer(Modifier.height(baseBottom + with(density) { travelPx.toDp() }))
                     }
                 }
             }

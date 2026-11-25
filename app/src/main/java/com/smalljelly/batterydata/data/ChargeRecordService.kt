@@ -5,7 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -14,6 +17,7 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.core.app.ServiceCompat
 import com.smalljelly.batterydata.MainActivity
 import com.smalljelly.batterydata.R
+import com.smalljelly.batterydata.island.BatteryIslandHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,38 +26,128 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
- * 记录一次充电时挂着的前台服务。
+ * 充电期间挂着的前台服务，两种模式：
  *
- * 为什么需要它：一次充电动辄一小时，用户不可能一直开着界面。前台服务可以持续
- * 每 10 秒采样一次，锁屏、切后台、退到桌面都不会断，直到拔电自动结算。
- * 通知栏里也能随时结束或取消这次记录。
+ * - **记录模式**：记录器处于等待 / 记录中。每 5 秒采样喂记录器与超级岛，前台通知是
+ *   记录通知（1001），通知栏可随时结束或取消。
+ * - **岛模式**：没在记录，但**正在充电且超级岛开关开着**。前台通知交给岛（2001）
+ *   或谷歌兜底实况（2002）本身，采样持续驱动岛刷新。
+ *
+ * 为什么需要岛模式：HyperOS 划掉最近任务会连前台服务一起杀整个进程，岛通知断更
+ * 就消失。只有前台服务能保住进程；而充电时手机插着电，保活没有电量成本——
+ * 所以保活严格门控在充电状态上：**拔电或关岛立刻退出，不充电零常驻**。
+ * 进程被杀后，下次插电由充电约束 job [ChargeKeepAliveJobService] 自动拉起（见 Manifest）。
  */
 class ChargeRecordService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val settings by lazy { BatterySettings(applicationContext) }
+    private var lastSample: BatterySample? = null
+
+    /** 当前钉住的前台通知 id：1001 记录 / 2001 岛 / 2002 兜底 */
+    private var pinnedId = 0
+
+    // 拔电且没在记录 → 立刻退出，不等下一次采样（岛模式零常驻的关键）
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_POWER_DISCONNECTED &&
+                ChargeRecorder.state.value is RecorderState.Idle
+            ) {
+                stopSelf()
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         // 顺序很重要：先把状态恢复出来，再立刻进前台，避免 startForegroundService
         // 之后 5 秒内没调 startForeground 被系统判为 ANR
         ChargeRecorder.attach(this)
         createChannel()
-        startForegroundWith(ChargeRecorder.state.value)
-
-        // 采样：把数据喂给记录器
-        scope.launch {
-            BatteryRepository(applicationContext).stream(10_000L).collect { sample ->
-                ChargeRecorder.onSample(sample)
+        val initial = BatteryRepository(applicationContext).snapshot()
+        lastSample = initial
+        val state = ChargeRecorder.state.value
+        when {
+            // 记录中且岛可用：前台通知直接用岛，不另发 1001。
+            // 否则 Android 16 会把 1001 提升成实时更新（Live Update），
+            // 用户会同时看到「超级岛 + 原生实况」两条，重复且吵。
+            state !is RecorderState.Idle && islandAllowed(initial) -> pinIsland(initial)
+            state !is RecorderState.Idle -> startForegroundWith(state)
+            islandAllowed(initial) -> pinIsland(initial)
+            else -> {
+                // 既没记录也不满足岛模式（误启动 / 重启时已拔电）：走一帧占位就退
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, idlePlaceholder(), 0)
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
             }
         }
-        // 状态：刷新通知；记录结束（Idle）就撤掉通知并退出 —— 不留常驻的"记录已结束"
+
+        // 岛接管前台通知（岛模式，以及"岛可用的记录模式"）：helper 每发一条岛/兜底
+        // 通知就交给这里钉住（同 id 重复 startForeground 即更新）。1001 记录通知期间不抢。
+        BatteryIslandHelper.foregroundPin = { id, notification ->
+            if (pinnedId == 0 || pinnedId == BatteryIslandHelper.ISLAND_NOTIFICATION_ID ||
+                pinnedId == BatteryIslandHelper.LIVE_NOTIFICATION_ID
+            ) {
+                runCatching {
+                    ServiceCompat.startForeground(this, id, notification, fgsType())
+                    pinnedId = id
+                }
+            }
+        }
+
+        runCatching {
+            registerReceiver(powerReceiver, IntentFilter(Intent.ACTION_POWER_DISCONNECTED))
+        }
+
+        // 采样：把数据喂给记录器（内部驱动岛）。岛功率按 5s 节流更新，
+        // 采样也得 5s 一拍，否则岛只能 10s 一更——充电时插电，读 sysfs 的成本可忽略
+        scope.launch {
+            BatteryRepository(applicationContext).stream(5_000L).collect { sample ->
+                lastSample = sample
+                ChargeRecorder.onSample(sample)
+                // 没在记录、又不满足岛模式（拔电 / 关岛）→ 没有留下的理由
+                if (ChargeRecorder.state.value is RecorderState.Idle && !islandAllowed(sample)) {
+                    stopSelf()
+                }
+            }
+        }
+        // 状态：岛可用时（含记录中）前台通知一律是岛；岛不可用才用 1001 记录通知。
+        // 不再让两者并存 —— 1001 在 Android 16 会被提升成实时更新，和岛重复。
         scope.launch {
             ChargeRecorder.state.collect { state ->
-                if (state is RecorderState.Idle) {
-                    getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
-                    stopSelf()
-                } else {
-                    updateNotification(state)
+                val s = lastSample
+                when {
+                    // 记录中且岛可用，或纯岛模式：前台通知固定为岛
+                    s != null && islandAllowed(s) -> {
+                        if (pinnedId != BatteryIslandHelper.ISLAND_NOTIFICATION_ID &&
+                            pinnedId != BatteryIslandHelper.LIVE_NOTIFICATION_ID
+                        ) {
+                            pinIsland(s)
+                        }
+                    }
+
+                    state is RecorderState.Idle -> {
+                        getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+                        stopSelf()
+                    }
+
+                    pinnedId != NOTIFICATION_ID -> {
+                        // 岛不可用：记录通知接管前台
+                        val notification = buildNotification(state)
+                        if (notification != null) {
+                            runCatching {
+                                ServiceCompat.startForeground(this@ChargeRecordService, NOTIFICATION_ID, notification, fgsType())
+                                pinnedId = NOTIFICATION_ID
+                                getSystemService(NotificationManager::class.java)
+                                    ?.cancel(BatteryIslandHelper.LIVE_NOTIFICATION_ID)
+                            }
+                        }
+                        lastNotifKey = notifKey(state)
+                    }
+
+                    else -> updateNotification(state)
                 }
             }
         }
@@ -64,12 +158,14 @@ class ChargeRecordService : Service() {
             ACTION_STOP -> ChargeRecorder.stopAndSave(this)
             ACTION_CANCEL -> ChargeRecorder.cancel(this)
             else -> {
+                val s = BatteryRepository(applicationContext).snapshot()
+                lastSample = s
                 val state = ChargeRecorder.state.value
-                // 没有在记录就把自己收掉：不要留一条"记录已结束"的常驻通知
-                if (state is RecorderState.Idle) {
-                    stopSelf()
-                } else {
-                    updateNotification(state)
+                when {
+                    // 岛可用（含记录中）：前台通知固定为岛
+                    islandAllowed(s) -> pinIsland(s)
+                    state !is RecorderState.Idle -> updateNotification(state)
+                    else -> stopSelf()
                 }
             }
         }
@@ -79,10 +175,44 @@ class ChargeRecordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isRunning = false
+        BatteryIslandHelper.foregroundPin = null
+        runCatching { unregisterReceiver(powerReceiver) }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         scope.cancel()
+        // 服务退出（多为拔电）后重新排期充电 job：下次插电由系统拉起复活岛。
+        runCatching { ChargeKeepAliveJobService.schedule(applicationContext) }
         super.onDestroy()
     }
+
+    /** 岛模式门控：正在充电 + 超级岛开关开。充电时插电，保活零电量成本。 */
+    private fun islandAllowed(sample: BatterySample): Boolean =
+        sample.isCharging && settings.islandEnabled()
+
+    /**
+     * 把岛（或谷歌兜底）通知钉成前台通知，并清掉可能残留的 1001 记录通知。
+     *
+     * 岛可用时它就是唯一的一条通知：记录中也一样，避免 Android 16 把 1001 提升成
+     * 实时更新、和超级岛同时出现两条。
+     */
+    private fun pinIsland(sample: BatterySample) {
+        // resetThrottle 保证首个采样 tick 必走 bypass 发送一次，岛在掐 XMSF 网络的机型上也能渲染
+        BatteryIslandHelper.resetThrottle()
+        val (id, notification) = BatteryIslandHelper.currentNotification(applicationContext, sample)
+        runCatching {
+            ServiceCompat.startForeground(this, id, notification, fgsType())
+            pinnedId = id
+            getSystemService(NotificationManager::class.java)?.let { manager ->
+                manager.cancel(NOTIFICATION_ID)
+                if (id != BatteryIslandHelper.LIVE_NOTIFICATION_ID) {
+                    manager.cancel(BatteryIslandHelper.LIVE_NOTIFICATION_ID)
+                }
+            }
+        }
+    }
+
+    private fun fgsType(): Int =
+        if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
 
     // ---------------------------------------------------------------- 通知
 
@@ -109,12 +239,8 @@ class ChargeRecordService : Service() {
             stopSelf()
             return
         }
-        val type = if (Build.VERSION.SDK_INT >= 34) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        } else {
-            0
-        }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType())
+        pinnedId = NOTIFICATION_ID
     }
 
     /** 只在"误启动"时用一帧，随即被撤掉 */
@@ -126,7 +252,7 @@ class ChargeRecordService : Service() {
             .setOngoing(true)
             .build()
 
-    // 通知内容去重：每 10 秒采样都会走到这里，但只有「展示内容真的变了」才重发，
+    // 通知内容去重：每 5 秒采样都会走到这里，但只有「展示内容真的变了」才重发，
     // 否则系统会把同一条通知反复重排/刷新，体验差。电量/分钟/平均功率变化才更新。
     private var lastNotifKey: String? = null
 
@@ -279,12 +405,20 @@ class ChargeRecordService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    private companion object {
-        const val CHANNEL_ID = "charge_recording"
-        const val NOTIFICATION_ID = 1001
-        const val STOP_REQUEST = 11
-        const val CANCEL_REQUEST = 12
-        const val ACTION_STOP = "com.smalljelly.batterydata.STOP_RECORDING"
-        const val ACTION_CANCEL = "com.smalljelly.batterydata.CANCEL_RECORDING"
+    companion object {
+        /**
+         * 服务是否已在运行。插电复活 job 会在拿到约束后补试两次，
+         * 用它把重复的 startForegroundService 挡掉（服务本身幂等，但没必要反复拉起）。
+         */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
+        private const val CHANNEL_ID = "charge_recording"
+        private const val NOTIFICATION_ID = 1001
+        private const val STOP_REQUEST = 11
+        private const val CANCEL_REQUEST = 12
+        private const val ACTION_STOP = "com.smalljelly.batterydata.STOP_RECORDING"
+        private const val ACTION_CANCEL = "com.smalljelly.batterydata.CANCEL_RECORDING"
     }
 }

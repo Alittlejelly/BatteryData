@@ -107,6 +107,20 @@ object ShizukuManager {
         }
     }
 
+    /**
+     * 一键保活白名单（Doze + 后台运行 appops）。逐条结果文本；
+     * Shizuku 不可用 / 未授权 / 绑定失败时返回 null。
+     */
+    fun applyKeepAliveWhitelist(context: Context): String? {
+        if (!isShizukuRunning() || !checkSelfPermission()) return null
+        return try {
+            getPrivilegedService(context)?.applyKeepAliveWhitelist(context.packageName)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to apply keep-alive whitelist", e)
+            null
+        }
+    }
+
     private fun getPrivilegedService(context: Context): IPrivilegedService? {
         if (privilegedService != null && serviceConnected) return privilegedService
         return try {
@@ -117,7 +131,9 @@ object ShizukuManager {
                 .daemon(false)
                 .processNameSuffix("privileged")
                 .debuggable(false)
-                .version(1)
+                // 版本 2：AIDL 加了 applyKeepAliveWhitelist。version 不变的话
+                // Shizuku 会复用旧 dex，覆盖安装后新方法找不到
+                .version(2)
             Shizuku.bindUserService(args, serviceConnection)
             val connected = bindLatch.await(3, TimeUnit.SECONDS)
             if (!connected) Log.w(TAG, "Privileged service bind timed out")

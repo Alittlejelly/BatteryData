@@ -6,6 +6,8 @@
     <!-- 记录一次完整充电需要长时间后台采样，用前台服务挂着，通知栏常驻 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 开机时若正插着电（或有没记完的会话），自动恢复前台服务 / 超级岛 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 16 起，记录中的充电会升级成「实时更新」（状态栏胶囊 + 进度卡）。
          这是个普通权限，装包即授予；用户仍可在系统设置里单独关掉本应用的实时更新，
@@ -37,6 +39,7 @@
             </intent-filter>
         </activity>
 
+        <!-- 记录模式 + 岛模式（充电门控保活）共用这一个前台服务，见类注释 -->
         <service
             android:name=".data.ChargeRecordService"
             android:exported="false"
@@ -45,6 +48,29 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="battery_charge_telemetry" />
         </service>
+
+        <!--
+          开机自动复活：BOOT_COMPLETED 是豁免隐式广播，进程被杀后开机仍能收到。
+          ACTION_POWER_CONNECTED 不在豁免清单里（targetSdk 26+ 清单收不到），插电复活
+          改由下面的充电约束 JobScheduler job 负责；这里保留它仅作个别厂商放行的兜底。
+        -->
+        <receiver
+            android:name=".data.PowerEventReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          插电自动复活：充电约束 job 由系统持久化调度，进程被杀后系统仍会重排拉起，
+          插电时执行 onStartJob 挂上岛模式前台服务。必须带 BIND_JOB_SERVICE 权限。
+        -->
+        <service
+            android:name=".data.ChargeKeepAliveJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!--
           给小米小部件（主题格式）读数据的只读接口。

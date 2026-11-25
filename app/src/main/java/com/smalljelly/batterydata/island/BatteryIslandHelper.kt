@@ -38,6 +38,8 @@ object BatteryIslandHelper {
     private const val LIVE_CHANNEL_ID = "battery_charge_live"
     private const val BUSINESS_TAG = "battery_charge"
     const val ISLAND_NOTIFICATION_ID = 2001
+    // 超级岛数据刷新间隔：同 ID 重发通知即"更新数据"（不新增、不重弹大岛）
+    private const val ISLAND_UPDATE_MS = 5_000L
     // 超级岛不可用时的谷歌原生实况通知（Live Update）兜底 ID
     const val LIVE_NOTIFICATION_ID = 2002
 
@@ -49,15 +51,22 @@ object BatteryIslandHelper {
     // 与 NexioSchedule 一致——否则每次采样都弹大岛会很吵。
     private var islandShowing = false
     // 普通通知去重 + 节流：内容没变不重发；电量变化立即更新，功率抖动限频 20s，
-    // 避免每 10 秒采样都 notify() 导致通知不断刷新。
+    // 避免每 5 秒采样都 notify() 导致通知不断刷新。
     private var lastFallbackKey: String? = null
     private var lastFallbackAt = 0L
     private var lastFallbackLevel = -1
-    // 岛更新节流：首次必发；之后内容没变不重发，电量没变则限频 30s——
-    // 避免每 10s 都重发岛通知并反复 toggle XMSF 网络。
+    // 岛更新节流：首次必发；之后内容没变不重发，电量没变则限频 5s——
+    // 功率每 5s 更新一次；内容没变不重发，避免无谓地反复 toggle XMSF 网络。
     private var lastIslandKey: String? = null
     private var lastIslandAt = 0L
     private var lastIslandLevel = -1
+
+    /**
+     * 前台服务钉住回调：岛 / 兜底通知每次发出后，把 (id, notification) 交给
+     * [com.smalljelly.batterydata.data.ChargeRecordService] 去 startForeground。
+     * 岛模式下前台通知就是岛通知本身，不多出一条常驻通知。服务销毁时置空。
+     */
+    var foregroundPin: ((Int, Notification) -> Unit)? = null
 
     fun init(context: Context) {
         ShizukuManager.init(context)
@@ -123,12 +132,17 @@ object BatteryIslandHelper {
         if (!isIslandSupported(context)) return
         val firstPop = !islandShowing
         val now = System.currentTimeMillis()
-        val key = "${sample.level}-${sample.powerW?.toInt()}"
-        if (!firstPop) {
-            if (key == lastIslandKey) return
-            if (sample.level == lastIslandLevel && now - lastIslandAt < 30_000) return
-        }
-        lastIslandKey = key
+        // 只按时间节流，不做内容去重。
+        //
+        // 超级岛的数据刷新在系统层面只有一条路：用**同一个通知 ID** 重新 notify，
+        // 换掉 extras 里的 miui.focus.param。系统按 update 处理（不新增、不重弹大岛，
+        // 因为后续都是 enableFloat=false）。所以"只刷新数据"= 定期重发同一条通知。
+        //
+        // 以前这里还有一道 key 去重（"$level-${powerW.toInt()}"）：功率整数没变就直接
+        // return —— 电量 86% 长时间不动、功率在 18.4~18.6W 抖动时 key 恒为 "86-18"，
+        // 岛就永远冻结在初始值。这是"数据都不会变"的根因。
+        if (!firstPop && now - lastIslandAt < ISLAND_UPDATE_MS) return
+        lastIslandKey = "${sample.level}-${sample.powerW?.toInt()}"
         lastIslandAt = now
         lastIslandLevel = sample.level
 
@@ -136,6 +150,18 @@ object BatteryIslandHelper {
         // 岛与谷歌兜底互斥：发岛时收掉兜底
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LIVE_NOTIFICATION_ID)
 
+        val notification = buildIslandNotification(context, sample, firstPop)
+        // 首次弹大岛，之后静默更新缩略态（firstPop 在函数开头已算好）
+        islandShowing = true
+
+        scope.launch { withShizukuBypass(context, notification) }
+    }
+
+    /**
+     * 构建岛通知（纯构建、不发送）：前台服务接管岛模式时用它立刻钉住前台通知，
+     * 不必等节流后的下一次发送。渠道需调用方先 [ensureChannel]。
+     */
+    fun buildIslandNotification(context: Context, sample: BatterySample, firstPop: Boolean): Notification {
         val contentIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -154,6 +180,9 @@ object BatteryIslandHelper {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setAutoCancel(false)
+            // 每 5s 都会重发一次做数据刷新：只要不重新提示（不响铃/不震动）。
+            // 大岛不会重弹，因为后续 param 里 enableFloat=false。
+            .setOnlyAlertOnce(true)
 
         val picsBundle = Bundle().apply {
             putParcelable("miui.focus.pic_app_icon", Icon.createWithResource(context, R.drawable.ic_launcher_flat))
@@ -164,11 +193,35 @@ object BatteryIslandHelper {
         builder.addExtras(Bundle().apply { putBundle("miui.focus.pics", picsBundle) })
 
         val notification = builder.build()
-        // 首次弹大岛，之后静默更新缩略态（firstPop 在函数开头已算好）
-        islandShowing = true
         notification.extras.putString("miui.focus.param", buildIslandParams(sample, firstPop))
+        return notification
+    }
 
-        scope.launch { withShizukuBypass(context, notification) }
+    /**
+     * 同步构建「此刻该钉住的那条」通知（岛或谷歌兜底），供前台服务立即 startForeground。
+     * 会先建好对应渠道。不发送、不改节流状态。
+     *
+     * 岛一律按缩略态（firstPop=false）构建：钉住只是占位满足前台服务 5 秒时限，真正的首次
+     * 大岛弹出交给随后 [resetThrottle] + [onSample] 的那次 bypass 发送（firstPop=!islandShowing）。
+     * 若这里也用 firstPop=true，钉住会先弹一次大岛、首个采样 tick 再弹一次，造成「双弹」。
+     */
+    fun currentNotification(context: Context, sample: BatterySample): Pair<Int, Notification> =
+        if (isIslandSupported(context)) {
+            ensureChannel(context)
+            ISLAND_NOTIFICATION_ID to buildIslandNotification(context, sample, firstPop = false)
+        } else {
+            ensureLiveChannel(context)
+            LIVE_NOTIFICATION_ID to buildGoogleLiveNotification(context, sample)
+        }
+
+    /** 清空发送节流：下一次 [onSample] 必发（前台服务接管时用它立刻补发 + 钉住）。 */
+    fun resetThrottle() {
+        lastIslandKey = null
+        lastIslandAt = 0L
+        lastIslandLevel = -1
+        lastFallbackKey = null
+        lastFallbackAt = 0L
+        lastFallbackLevel = -1
     }
 
     fun cancel(context: Context) {
@@ -200,6 +253,14 @@ object BatteryIslandHelper {
         ensureLiveChannel(context)
         manager.cancel(ISLAND_NOTIFICATION_ID)
 
+        val notification = buildGoogleLiveNotification(context, sample)
+        // 普通通知不挂进度条：纯文本（标题电量 + 正文功率），安静常驻
+        manager.notify(LIVE_NOTIFICATION_ID, notification)
+        foregroundPin?.invoke(LIVE_NOTIFICATION_ID, notification)
+    }
+
+    /** 构建谷歌兜底实况通知（纯构建、不发送）。渠道需调用方先 [ensureLiveChannel]。 */
+    fun buildGoogleLiveNotification(context: Context, sample: BatterySample): Notification {
         val open = PendingIntent.getActivity(
             context,
             LIVE_NOTIFICATION_ID,
@@ -208,7 +269,7 @@ object BatteryIslandHelper {
         )
         val level = sample.level.coerceIn(0, 100)
         val powerText = sample.powerW?.let { String.format(java.util.Locale.US, "%.1fW", it) } ?: "充电中"
-        val builder = NotificationCompat.Builder(context, LIVE_CHANNEL_ID)
+        return NotificationCompat.Builder(context, LIVE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_charge)
             .setContentTitle("充电中 $level%")
             .setContentText(powerText)
@@ -220,9 +281,7 @@ object BatteryIslandHelper {
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-
-        // 普通通知不挂进度条：纯文本（标题电量 + 正文功率），安静常驻
-        manager.notify(LIVE_NOTIFICATION_ID, builder.build())
+            .build()
     }
 
     private fun ensureLiveChannel(context: Context) {
@@ -241,6 +300,7 @@ object BatteryIslandHelper {
         if (!isShizukuAvailable()) {
             // 没授权也发：部分机型不掐 XMSF 网络仍能弹岛
             manager.notify(ISLAND_NOTIFICATION_ID, notification)
+            foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
             return
         }
         bypassMutex.withLock {
@@ -252,10 +312,12 @@ object BatteryIslandHelper {
             }
             if (!disabled) {
                 manager.notify(ISLAND_NOTIFICATION_ID, notification)
+                foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
                 return@withLock
             }
             try {
                 manager.notify(ISLAND_NOTIFICATION_ID, notification)
+                foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
                 delay(100)
             } finally {
                 try {
@@ -271,23 +333,44 @@ object BatteryIslandHelper {
     private fun buildIslandParams(sample: BatterySample, firstPop: Boolean): String {
         val powerText = sample.powerW?.let { "${it.toInt()}W" } ?: "充电中"
         val tempText = sample.temperatureC?.let { String.format(java.util.Locale.US, "%.1f°C", it) } ?: ""
-        val etaText = sample.etaMinutes?.let { "预计 ${it / 60} 小时 ${it % 60} 分后充满" } ?: "正在充电"
+        // 记录中：岛显示这次记录的状态（时长 / 充入电能），而不是通用的"预计充满"。
+        // 记录与普通充电共用同一条岛通知，靠这里的内容切换体现"已接入记录"。
+        val recording = ChargeRecorder.state.value as? RecorderState.Recording
+        val baseTitle = if (recording != null) "充电记录中" else "电池充电中"
+        // etaMinutes 是自定义 getter，先取到局部变量才能 smart cast
+        val eta = sample.etaMinutes
+        val baseContent = when {
+            recording != null -> buildString {
+                append("已记录 ${recording.minutes} 分钟")
+                recording.energyWh?.let {
+                    append(String.format(java.util.Locale.US, " · 充入 %.1fWh", it))
+                }
+            }
+            eta != null -> "预计 ${eta / 60} 小时 ${eta % 60} 分后充满"
+            else -> "正在充电"
+        }
 
         val paramV2 = JSONObject().apply {
             put("business", BUSINESS_TAG)
             put("protocol", 1)
-            // 只有首次弹大岛；后续刷新 enableFloat=false 静默更新缩略态（NexioSchedule 同款）
+            // 官方语义：enableFloat = 通知**更新时**是否自动展开为展开态（默认 false）。
+            // 只有首次让大岛弹出，后续静默更新缩略态。
             put("enableFloat", firstPop)
-            if (!firstPop) put("islandFirstFloat", true)
+            // 官方语义：islandFirstFloat = 通知**第一次出现时**是否展开（默认 true）。
+            // 只在首次传 —— 每次更新都传 true 会被系统当成"首次出现"重新展开，
+            // 表现为岛反复弹开（这也是之前"每次刷新都重弹"的一个来源）。
+            if (firstPop) put("islandFirstFloat", true)
             put("updatable", true)
             put("reopen", "reopen")
             put("sequence", sequenceCounter.incrementAndGet())
-            put("aodTitle", "充电中 ${sample.level}%")
+            put("aodTitle", if (recording != null) "记录中 ${sample.level}%" else "充电中 ${sample.level}%")
+            // OS2 状态栏焦点文案（官方推荐显式传）
+            put("ticker", if (recording != null) "充电记录中 ${sample.level}%" else "充电中 $powerText")
 
             put("baseInfo", JSONObject().apply {
                 put("type", 2)
-                put("title", "电池充电中")
-                put("content", etaText)
+                put("title", baseTitle)
+                put("content", baseContent)
                 put("subTitle", "")
                 put("extraTitle", "")
                 put("specialTitle", "")

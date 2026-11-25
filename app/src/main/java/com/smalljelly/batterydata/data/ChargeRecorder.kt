@@ -3,6 +3,7 @@ package com.smalljelly.batterydata.data
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,8 @@ sealed interface RecorderState {
  */
 object ChargeRecorder {
 
+    private const val TAG = "ChargeRecorder"
+
     /** 两次有效采样之间的最小间隔：App 前台采样与前台服务采样重叠时用它去重 */
     private const val MIN_SAMPLE_GAP_MS = 4_000L
 
@@ -91,12 +94,21 @@ object ChargeRecorder {
 
     // ---------------------------------------------------------------- 对外操作
 
-    /** App 启动时调一次：初始化 + 恢复上次没记完的会话 */
+    /**
+     * App 启动 / 插电 / 开机时调一次：初始化 + 恢复上次没记完的会话。
+     * 有记录会话，或**正在充电且岛开关开着**（岛模式保活）时拉起前台服务。
+     * 服务自己会在拔电 / 关岛 / 记录结束后退出，这里只管拉。
+     */
     @Synchronized
     fun ensure(context: Context) {
         init(context)
         if (_state.value is RecorderState.Idle) restore()
-        if (_state.value !is RecorderState.Idle) startService(appContext ?: return)
+        val ctx = appContext ?: return
+        val islandKeepAlive = _state.value is RecorderState.Idle && run {
+            val sample = BatteryRepository(ctx).snapshot()
+            sample.isCharging && BatterySettings(ctx).islandEnabled()
+        }
+        if (_state.value !is RecorderState.Idle || islandKeepAlive) startService(ctx)
     }
 
     /**
@@ -141,7 +153,8 @@ object ChargeRecorder {
         session = null
         _state.value = RecorderState.Idle
         clearPersist()
-        stopService()
+        // 不直接 stopService：还插着电且岛开着时，服务要转岛模式继续保活；
+        // 不满足时服务自己的状态收集器会退出
     }
 
     /** 立刻结束并保存（通知栏的“结束并保存”） */
@@ -165,7 +178,7 @@ object ChargeRecorder {
 
     // ---------------------------------------------------------------- 采样驱动
 
-    /** 每次采样（10 秒）喂进来，内部做状态机推进 */
+    /** 每次采样喂进来（服务 5s / 前台页面 10s），内部做状态机推进 */
     @Synchronized
     fun onSample(sample: BatterySample) {
         val now = System.currentTimeMillis()
@@ -308,7 +321,8 @@ object ChargeRecorder {
         session = null
         _state.value = RecorderState.Idle
         clearPersist()
-        stopService()
+        // 服务的去留由它自己的状态收集器决定：还插着电且岛开着 → 转岛模式保活，
+        // 否则退出。这里不 stopService，免得把岛模式一起杀掉
         if (active == null || !save) return
 
         val to = maxOf(active.level, lastSample?.level ?: 0)
@@ -565,17 +579,23 @@ object ChargeRecorder {
     // ---------------------------------------------------------------- 服务
 
     private fun startService(context: Context) {
-        runCatching {
+        // 已在运行就别再拉起：插电复活 job 会补试两次，重复 start 只会多走一遍启动流程
+        if (ChargeRecordService.isRunning) {
+            Log.i(TAG, "服务已在运行，跳过重复启动")
+            return
+        }
+        try {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, ChargeRecordService::class.java),
             )
+            Log.i(TAG, "startForegroundService 已发出")
+        } catch (e: Exception) {
+            // 最常见是 ForegroundServiceStartNotAllowedException：从后台（含 job / 广播）
+            // 启动前台服务被系统拒绝。以前这里用 runCatching 静默吞掉，
+            // "被杀后插电不复活"完全无从排查 —— 现在至少能在 logcat 里看到原因。
+            Log.e(TAG, "startForegroundService 失败", e)
         }
-    }
-
-    private fun stopService() {
-        val ctx = appContext ?: return
-        runCatching { ctx.stopService(Intent(ctx, ChargeRecordService::class.java)) }
     }
 
     // ---------------------------------------------------------------- 数据结构
