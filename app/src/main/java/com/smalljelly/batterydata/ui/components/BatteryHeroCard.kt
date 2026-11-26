@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -35,6 +38,9 @@ import com.smalljelly.batterydata.data.BatterySample
 import com.smalljelly.batterydata.ui.theme.batteryAccent
 import com.haooz.nexioui.text.NexioText
 import java.util.Locale
+
+/** 大电池卡的最小高度；实际高度按内容撑开，不会再裁掉最后一行 */
+private val CARD_MIN_HEIGHT = 168.dp
 
 /**
  * 顶部大电池卡片：底色是浅色电池壳，实心部分按剩余电量填充，还原 MIUI “省电与电池” 的主视觉。
@@ -71,30 +77,34 @@ fun BatteryHeroCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(168.dp)
+            // 不再写死高度：卡片按内容撑开，最少 168dp。
+            // 之前是 `.height(168.dp)` + 内容 `SpaceBetween` + 圆角 clip ——
+            // 内容（状态胶囊 + 64sp 数字 + 预计时长）只要比 128dp 的可用高度多出几 dp，
+            // 最后那行就会被卡片边缘裁掉，看起来"预计时长被切了一半"。
+            .heightIn(min = CARD_MIN_HEIGHT)
             .clip(RoundedCornerShape(26.dp))
-            .background(trackColor),
-    ) {
-        Box(
-            Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(fraction)
-                .background(Brush.verticalGradient(listOf(accent, accentDeep))),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.White.copy(alpha = 0.14f), Color.Transparent),
-                        ),
+            .background(trackColor)
+            // 电量填充层改成画在内容后面：它需要跟着卡片最终高度走，
+            // 用子 Box 的 fillMaxHeight 就要求父级必须是固定高度（又回到裁切问题）
+            .drawBehind {
+                val filledWidth = size.width * fraction
+                if (filledWidth <= 0f) return@drawBehind
+                drawRect(
+                    brush = Brush.verticalGradient(listOf(accent, accentDeep)),
+                    size = Size(filledWidth, size.height),
+                )
+                // 顶部一层很淡的高光，做出"玻璃壳"的立体感
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        listOf(Color.White.copy(alpha = 0.14f), Color.Transparent),
                     ),
-            )
-        }
-
+                    size = Size(filledWidth, size.height),
+                )
+            },
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .padding(horizontal = 22.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {

@@ -88,6 +88,8 @@ import com.smalljelly.batterydata.data.formatEta
 import com.smalljelly.batterydata.ui.components.BatteryHealthCard
 import com.smalljelly.batterydata.ui.components.BatteryHeroCard
 import com.smalljelly.batterydata.ui.components.CardExpandOverlay
+import com.smalljelly.batterydata.ui.components.navSlideEnter
+import com.smalljelly.batterydata.ui.components.navSlideExit
 import com.smalljelly.batterydata.ui.components.reportPressTo
 import com.smalljelly.batterydata.ui.components.InfoRow
 import com.smalljelly.batterydata.ui.components.InnerDivider
@@ -193,6 +195,12 @@ fun BatteryScreen() {
     val recordsVersion by ChargeRecorder.recordsVersion.collectAsState()
 
     LaunchedEffect(Unit) {
+        // 预见式返回开关：启动时把持久化的值灌进全局状态（AppPage 都读它）
+        runCatching {
+            com.smalljelly.batterydata.ui.theme.AppMotion.applyPredictiveBack(
+                BatterySettings(context.applicationContext).predictiveBackEnabled(),
+            )
+        }
         ChargeRecorder.ensure(context.applicationContext)
         ScreenTimeTracker.init(context.applicationContext)
         BatteryRepository(context.applicationContext).stream(REFRESH_INTERVAL_MS).collect { sample ->
@@ -216,9 +224,6 @@ fun BatteryScreen() {
     // 哪一页的「更多」菜单展开着（-1 = 没展开）。
     // 不能用单个 Boolean：两个主页面在 Pager 里始终同时活着，共用一个 bool 会让
     // 两页的菜单同时挂载，出现两份重叠的面板。
-    var menuPage by remember { mutableIntStateOf(-1) }
-    // 手势闭包只创建一次，必须实时读菜单状态，否则会一直拿到首次组合时的值
-    val menuPageState by rememberUpdatedState(menuPage)
     // 顶栏玻璃按钮正被按住/拖拽（拉伸交互）：期间禁用 Pager 横滑切页。
     // 按下瞬间就置 true（手势尚无位移），比按位移阈值拦截更稳，斜向拖也不漏。
     var topBarDragging by remember { mutableStateOf(false) }
@@ -227,7 +232,6 @@ fun BatteryScreen() {
     // 底栏选中项：点击/拖拽时先乐观更新，再由 pager 的落位回写，避免"滑块卡在两格之间"
     var barIndex by remember { mutableIntStateOf(0) }
     // 二级页：关于（右侧推入）/ 单次充电详情（卡片原地展开）
-    var showAbout by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     // 日志详情：内容和可见性分开存。关闭时只把可见性置 false，内容留着播完滑出动画，
     // 否则滑出去的是个空面板，看起来像"啪一下消失"。
@@ -237,6 +241,8 @@ fun BatteryScreen() {
     var detailVisible by remember { mutableStateOf(false) }
     // 正在播收起动画：这期间仍算"二级页打开"，底栏不能提前滑进来盖住缩小的面板
     var detailClosing by remember { mutableStateOf(false) }
+    // 设置页里是否开着二级页（关于 / 通知与显示 / 电池容量 …）：底栏归这一层管
+    var settingsSubPage by remember { mutableStateOf(false) }
     // 被点卡片在 root 里的位置，作为展开动画的起点
     var detailOrigin by remember { mutableStateOf<Rect?>(null) }
     // 展开进度放在容器层：面板和它后面的页面共用这一条，节奏才一致
@@ -244,7 +250,26 @@ fun BatteryScreen() {
     val detailBlurPx = with(LocalDensity.current) { DetailBlurRadius.toPx() }
     // 被点卡片的图层快照：展开开头用它顶替卡片画面
     var detailSnapshot by remember { mutableStateOf<GraphicsLayer?>(null) }
-    val overlayOpen = showAbout || showLogs || logDetailVisible || detailVisible || detailClosing
+    val overlayOpen = showLogs || logDetailVisible || detailVisible || detailClosing ||
+        settingsSubPage
+
+    LaunchedEffect(detailId) {
+        // 不变量：卡片已经卸载（detailId 清空）时，detailVisible 不允许再为 true。
+        // CardExpandOverlay 自己接管返回时会绕过宿主的 onBack，直接把 detailId 清掉 ——
+        // 之前只有 overlayOpen 依赖 detailVisible，它一残留，底栏就永远不回来。
+        if (detailId == null) detailVisible = false
+    }
+
+    // 收起动画的看门狗：detailClosing 只在"卡片正在缩回去"这段时间为 true，
+    // 正常路径由 CardExpandOverlay 的 onDismissed 复位。但动画一旦被打断
+    // （页面切走、手势取消、系统回收渲染帧），那个回调就不会来了 ——
+    // 标志永久卡在 true，底栏就再也不出现。这里兜一个超时强制复位。
+    LaunchedEffect(detailClosing) {
+        if (detailClosing) {
+            kotlinx.coroutines.delay(700)
+            detailClosing = false
+        }
+    }
 
     // 底栏的玻璃采样源：整页内容。底栏自己画在这层**外面**，
     // 否则"采样层里包含采样者"会让 HWUI 渲染树成环（之前踩过，直接 SIGSEGV）。
@@ -260,18 +285,13 @@ fun BatteryScreen() {
 
     LaunchedEffect(pagerState.currentPage) {
         barIndex = pagerState.currentPage
-        // 换了页，上一页的菜单不该还挂着
-        if (menuPage >= 0) menuPage = -1
     }
-
-    // 返回键一级一级退：日志详情 → 日志收集 → 关于 → 主页面。
     // 之前是一次性把 viewingLog / showLogs / showAbout 全清掉，
     // 从"日志详情"按返回就直接掉回主页面（连跳两级），像是没进过日志页。
     BackHandler(enabled = overlayOpen || pagerState.currentPage != 0) {
         when {
             logDetailVisible -> logDetailVisible = false
             showLogs -> showLogs = false
-            showAbout -> showAbout = false
             detailVisible -> {
                 detailVisible = false
                 detailClosing = true
@@ -285,9 +305,9 @@ fun BatteryScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .layerBackdrop(barBackdrop)
-                // 两种情况在 Initial 阶段吃掉横向位移，Pager 在 Main 阶段看到已消费就不翻页：
-                // 1) 菜单展开时横滑只用来收菜单；2) 在顶栏按钮行里横滑是在拖玻璃按钮（拉伸），
-                //    不切页。按钮 inspectDragGestures observeConsumed=true，仍能观察到拉伸。
+                // 在顶栏按钮行里横滑是在拖玻璃按钮（拉伸），不许触发翻页：
+                // 在 Initial 阶段吃掉横向位移，Pager 在 Main 阶段看到已消费就不翻页。
+                // 按钮的 inspectDragGestures observeConsumed=true，仍能观察到拉伸。
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(
@@ -302,16 +322,13 @@ fun BatteryScreen() {
                                 ?: event.changes.firstOrNull { it.pressed }
                             if (change == null || !change.pressed) break
                             if (!blocking) {
-                                val menuOpen = menuPageState >= 0
-                                // 菜单没开、又不在顶栏按钮行 → 让 Pager 正常翻页
-                                if (!menuOpen && !inTopButtonRow) break
+                                // 顶栏按钮行里的横滑是拖玻璃钮（拉伸），不该翻页
+                                if (!inTopButtonRow) break
                                 val total = change.position - down.position
                                 if (abs(total.x) > viewConfiguration.touchSlop &&
                                     abs(total.x) > abs(total.y)
                                 ) {
                                     blocking = true
-                                    // 菜单开着才播收起动画；按钮行拖拽只是吃掉横滑，不动菜单
-                                    if (menuOpen) menuPage = -1
                                 } else if (abs(total.y) > viewConfiguration.touchSlop) {
                                     // 纵向：交给列表滚动 / 顶栏折叠
                                     break
@@ -344,7 +361,7 @@ fun BatteryScreen() {
                 // 菜单展开时整页锁死：横滑只用来收菜单（下面的 Initial 拦截负责），
                 // 页面一动不动。光靠消费事件不够稳 —— Pager 的拖动检测有时已经启动，
                 // 这一条是硬开关，保证不会再出现"菜单开着页面滑走一半"。
-                userScrollEnabled = menuPage < 0 && !topBarDragging,
+                userScrollEnabled = !topBarDragging,
                 // 滑到头不要回弹拉伸（否则会露出页面外的空白，像是"滑出界")
                 overscrollEffect = null,
             ) { page ->
@@ -358,8 +375,6 @@ fun BatteryScreen() {
                             recorder = recorderState,
                             // 只有记录页真的在当前可见位置时，新记录才播入场动画
                             isActive = pagerState.currentPage == 1 && !overlayOpen,
-                            menuOpen = menuPage == 1,
-                            onMenuOpenChange = { open -> menuPage = if (open) 1 else -1 },
                             onStartRecording = { ChargeRecorder.arm(context) },
                             onCancelRecording = { ChargeRecorder.cancel(context) },
                             onFinishRecording = { ChargeRecorder.stopAndSave(context) },
@@ -374,7 +389,6 @@ fun BatteryScreen() {
                                 detailClosing = false
                                 detailVisible = true
                             },
-                            onOpenAbout = { showAbout = true },
                             onModalVisibleChange = { modalVisible = it },
                             onTopBarPressChange = { topBarDragging = it },
                         )
@@ -384,29 +398,17 @@ fun BatteryScreen() {
 
                     else -> SettingsPage(
                         onOpenLogs = { showLogs = true },
+                        // 设置里进二级页时同样要让底栏让位（关于页就是从这里进去的）
+                        onSubPageVisibleChange = { settingsSubPage = it },
                     )
                 }
             }
 
-            // 关于页从右侧推入；两个主页面始终活在 Pager 里，回来时状态不丢
-            AnimatedVisibility(
-                visible = showAbout,
-                enter = slideInHorizontally(spring(dampingRatio = 0.92f, stiffness = 420f)) { it / 5 } +
-                    fadeIn(tween(160)),
-                exit = slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(160)),
-            ) {
-                AboutScreen(
-                    onBack = { showAbout = false },
-                    onOpenLogs = { showLogs = true },
-                )
-            }
-
-            // 日志诊断页：和关于页同一套右侧推入动画
+            // 日志诊断页：NexioSchedule 那套侧滑载入（整屏推入 + 长尾缓动）
             AnimatedVisibility(
                 visible = showLogs,
-                enter = slideInHorizontally(spring(dampingRatio = 0.92f, stiffness = 420f)) { it / 5 } +
-                    fadeIn(tween(160)),
-                exit = slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(160)),
+                enter = navSlideEnter(),
+                exit = navSlideExit(),
             ) {
                 LogDiagnosticScreen(
                     onBack = { showLogs = false },
@@ -419,12 +421,11 @@ fun BatteryScreen() {
                 )
             }
 
-            // 日志详情：和日志页同一套右侧推入动画
+            // 日志详情：同一套侧滑载入（压在日志页上面）
             AnimatedVisibility(
                 visible = logDetailVisible,
-                enter = slideInHorizontally(spring(dampingRatio = 0.92f, stiffness = 420f)) { it / 5 } +
-                    fadeIn(tween(160)),
-                exit = slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(160)),
+                enter = navSlideEnter(),
+                exit = navSlideExit(),
             ) {
                 viewingLog?.let { (log, text) ->
                     LogDetailScreen(log = log, content = text, onBack = { logDetailVisible = false })
@@ -441,7 +442,13 @@ fun BatteryScreen() {
                     origin = detailOrigin,
                     snapshot = detailSnapshot,
                     progress = detailAnim,
+                    predictiveBack = { com.smalljelly.batterydata.ui.theme.AppMotion.predictiveBack },
                     onDismissed = {
+                        // ⚠ 必须把 detailVisible 也复位：这个回调既可能来自宿主的 onBack，
+                        // 也可能来自 CardExpandOverlay 自己接管的返回手势/预测性返回。
+                        // 后一条路径以前只清 detailId，detailVisible 永远停在 true ——
+                        // 于是 overlayOpen 恒为真，底栏再也不回来（"退出后底栏消失"）。
+                        detailVisible = false
                         detailId = null
                         detailSnapshot = null
                         detailClosing = false
@@ -469,8 +476,6 @@ fun BatteryScreen() {
             PageBottomBar(
                 selected = barIndex,
                 onSelect = { index ->
-                    // 菜单是盖在页面上的，先收回它再切页
-                    if (menuPage >= 0) menuPage = -1
                     barIndex = index
                     scope.launch { pagerState.animateScrollToPage(index) }
                 },

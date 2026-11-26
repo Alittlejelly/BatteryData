@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.haooz.nexioui.overscroll.overScrollVertical
 import com.haooz.nexioui.text.NexioText
 import com.haooz.nexioui.theme.NexioTheme
 import com.haooz.softglass.SoftGlassTheme
@@ -98,7 +99,10 @@ fun RealtimeScreen() {
                     modifier = Modifier
                         .fillMaxSize()
                         .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
-                        .verticalScroll(scrollState)
+                        // 两端弹簧回弹（滑动超出反馈）；同时关掉 foundation 自带的
+                        // overscrollEffect，两套一起上会互相抢位移、抖一下
+                        .overScrollVertical()
+                        .verticalScroll(scrollState, overscrollEffect = null)
                         .padding(horizontal = 16.dp),
                 ) {
                     NexioTopContentSpacer(topBarState)

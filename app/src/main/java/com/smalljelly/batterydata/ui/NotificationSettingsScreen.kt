@@ -59,6 +59,7 @@ import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.island.BatteryIslandHelper
 import com.smalljelly.batterydata.shizuku.ShizukuManager
+import com.smalljelly.batterydata.ui.components.AppPage
 import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -84,6 +85,7 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
     var islandEnabled by remember { mutableStateOf(settings.islandEnabled()) }
     var autoRecordEnabled by remember { mutableStateOf(settings.autoRecordEnabled()) }
     var overlayEnabled by remember { mutableStateOf(settings.overlayEnabled()) }
+    var chargeNotice by remember { mutableStateOf(settings.chargeNoticeEnabled()) }
 
     // 启动悬浮窗并回查结果：部分 ROM 会给权限但拒绝窗口，失败就把开关复位，
     // 避免出现「开关显示已开启、实际没有悬浮窗」的假状态
@@ -112,50 +114,12 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    val scrollState = rememberScrollState()
-    val topBarState = rememberNexioTopBarState()
-    val backdrop = rememberLayerBackdrop()
-    val (pullModifier, _) = rememberTopBarPull()
-
-    Scaffold(
-        topBar = {
-            NexioTopBar(
-                state = topBarState,
-                title = "通知与显示",
-                largeTitle = "通知与显示",
-                backdrop = backdrop,
-                navigation = { backdropAlpha, shadowAlpha ->
-                    Box(Modifier.rotate(180f)) {
-                        NexioIconButton(
-                            onClick = onBack,
-                            backdrop = backdrop,
-                            icon = NexioIcons.Basic.ArrowRight,
-                            contentDescription = "返回",
-                            backdropAlpha = backdropAlpha,
-                            shadowAlpha = shadowAlpha,
-                            iconTint = colors.onBackground,
-                        )
-                    }
-                },
-            )
-        },
-        containerColor = colors.background,
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { innerPadding ->
-        val measuredTop = innerPadding.calculateTopPadding()
-        val contentTopInset =
-            (if (measuredTop > 0.dp) measuredTop else CollapsibleTopAppBarDefaults.CollapsedHeight) + 8.dp
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.background)
-                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
-                .then(pullModifier)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp),
-        ) {
-            Spacer(Modifier.height(contentTopInset))
+    AppPage(
+        title = "通知与显示",
+        largeTitle = "通知与显示",
+        onBack = onBack,
+        horizontalPadding = 24.dp,
+    ) {
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -163,15 +127,40 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
                 insideMargin = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
             ) {
                 Column(Modifier.fillMaxWidth()) {
+                    // 总开关：所有「插电才出现」的电量通知都归它管（超级岛 / 实况兜底）。
+                    // 放在最上面，是因为它一关，下面的超级岛也就没有意义了。
+                    ToggleRow(
+                        title = "插电电量提醒",
+                        summary = if (chargeNotice) {
+                            "充电时在通知栏与超级岛显示电量 / 功率，关掉就一条都不弹"
+                        } else {
+                            "已关闭：单纯插着电不会再出现电量提醒与超级岛"
+                        },
+                        checked = chargeNotice,
+                        onCheckedChange = { on ->
+                            chargeNotice = on
+                            settings.setChargeNoticeEnabled(on)
+                            if (on) {
+                                // 立刻按当前状态补一次：正插着电就马上把岛 / 通知挂回来
+                                ChargeRecorder.ensure(context.applicationContext)
+                                com.smalljelly.batterydata.data.ChargeKeepAliveJobService
+                                    .schedule(context.applicationContext)
+                            } else {
+                                // 关掉就把已经挂在通知栏 / 岛上的那条收掉，不用等下次采样
+                                BatteryIslandHelper.cancel(context)
+                            }
+                        },
+                    )
+                    Spacer(Modifier.height(16.dp))
                     ToggleRow(
                         title = "小米超级岛",
-                        summary = if (islandSupported) {
-                            "充电时在顶部岛显示电量 / 功率"
-                        } else {
-                            "当前设备不支持超级岛"
+                        summary = when {
+                            !islandSupported -> "当前设备不支持超级岛"
+                            !chargeNotice -> "已被上面的「插电电量提醒」关闭"
+                            else -> "充电时在顶部岛显示电量 / 功率"
                         },
                         checked = islandEnabled,
-                        enabled = islandSupported,
+                        enabled = islandSupported && chargeNotice,
                         onCheckedChange = {
                             islandEnabled = it
                             settings.setIslandEnabled(it)
@@ -235,7 +224,6 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
                 color = colors.onSurfaceVariantSummary,
             )
             Spacer(Modifier.height(40.dp))
-        }
     }
 }
 
@@ -274,50 +262,12 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val scrollState = rememberScrollState()
-    val topBarState = rememberNexioTopBarState()
-    val backdrop = rememberLayerBackdrop()
-    val (pullModifier, _) = rememberTopBarPull()
-
-    Scaffold(
-        topBar = {
-            NexioTopBar(
-                state = topBarState,
-                title = "后台与权限",
-                largeTitle = "后台与权限",
-                backdrop = backdrop,
-                navigation = { backdropAlpha, shadowAlpha ->
-                    Box(Modifier.rotate(180f)) {
-                        NexioIconButton(
-                            onClick = onBack,
-                            backdrop = backdrop,
-                            icon = NexioIcons.Basic.ArrowRight,
-                            contentDescription = "返回",
-                            backdropAlpha = backdropAlpha,
-                            shadowAlpha = shadowAlpha,
-                            iconTint = colors.onBackground,
-                        )
-                    }
-                },
-            )
-        },
-        containerColor = colors.background,
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { innerPadding ->
-        val measuredTop = innerPadding.calculateTopPadding()
-        val contentTopInset =
-            (if (measuredTop > 0.dp) measuredTop else CollapsibleTopAppBarDefaults.CollapsedHeight) + 8.dp
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.background)
-                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
-                .then(pullModifier)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp),
-        ) {
-            Spacer(Modifier.height(contentTopInset))
+    AppPage(
+        title = "后台与权限",
+        largeTitle = "后台与权限",
+        onBack = onBack,
+        horizontalPadding = 24.dp,
+    ) {
 
             // Shizuku：只用于超级岛通知放行 XMSF 网络和系统白名单，不参与电池数据读取
             Card(
@@ -474,7 +424,6 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(40.dp))
-        }
     }
 }
 

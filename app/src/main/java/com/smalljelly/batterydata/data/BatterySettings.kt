@@ -53,6 +53,28 @@ class BatterySettings(context: Context) {
         prefs.edit().putBoolean(KEY_ISLAND_ENABLED, enabled).apply()
     }
 
+    /**
+     * 插电电量提醒：充电时发的那条电量通知（超级岛 / 实况兜底），默认开启。
+     *
+     * 它比「超级岛」更外层：关掉它以后，**单纯插着电**不会再出现任何通知，
+     * 只有正在进行中的充电记录才会有自己的记录通知。
+     */
+    fun chargeNoticeEnabled(): Boolean = prefs.getBoolean(KEY_CHARGE_NOTICE, true)
+
+    fun setChargeNoticeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CHARGE_NOTICE, enabled).apply()
+    }
+
+    /**
+     * 预见式返回动画：二级页跟手预览返回（手指滑到哪、页面退到哪），默认开启。
+     * 关掉就退回普通返回动画，老系统 / 不习惯跟手预览的用户可以关。
+     */
+    fun predictiveBackEnabled(): Boolean = prefs.getBoolean(KEY_PREDICTIVE_BACK, true)
+
+    fun setPredictiveBackEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PREDICTIVE_BACK, enabled).apply()
+    }
+
     /** 自动充电记录：插电自动开始、拔电自动保存，默认关闭 */
     fun autoRecordEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_RECORD, false)
 
@@ -74,6 +96,8 @@ class BatterySettings(context: Context) {
         const val KEY_UPDATE_SOURCE = "update_source"
         const val KEY_MATERIAL_LEVEL = "material_level"
         const val KEY_ISLAND_ENABLED = "island_enabled"
+        const val KEY_CHARGE_NOTICE = "charge_notice"
+        const val KEY_PREDICTIVE_BACK = "predictive_back"
         const val KEY_AUTO_RECORD = "auto_record"
         const val KEY_OVERLAY = "overlay"
     }

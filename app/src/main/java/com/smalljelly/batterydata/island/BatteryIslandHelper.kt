@@ -16,7 +16,6 @@ import com.smalljelly.batterydata.data.BatterySample
 import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.data.RecorderState
 import com.smalljelly.batterydata.shizuku.ShizukuManager
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -37,14 +36,16 @@ object BatteryIslandHelper {
     private const val CHANNEL_ID = "battery_charge_island"
     private const val LIVE_CHANNEL_ID = "battery_charge_live"
     private const val BUSINESS_TAG = "battery_charge"
+    private const val SEQ_PREFS = "island_state"
+    private const val SEQ_KEY = "last_sequence"
     const val ISLAND_NOTIFICATION_ID = 2001
     // 超级岛数据刷新间隔：同 ID 重发通知即"更新数据"（不新增、不重弹大岛）
     private const val ISLAND_UPDATE_MS = 5_000L
     // 超级岛不可用时的谷歌原生实况通知（Live Update）兜底 ID
     const val LIVE_NOTIFICATION_ID = 2002
 
-    private val sequenceCounter = AtomicLong(System.currentTimeMillis() / 1000)
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val sequenceLock = Any()
     // 串行化 disable→notify→enable，避免并发把 XMSF 网络状态搞乱
     private val bypassMutex = Mutex()
     // 岛是否已在显示：只有首次弹出大岛（enableFloat=true），后续刷新静默更新缩略态，
@@ -85,6 +86,20 @@ object BatteryIslandHelper {
         false
     }
 
+    /**
+     * 系统焦点通知协议版本：1 = OS1，2 = OS2，3 = OS3。
+     *
+     * 官方文档：OS2/OS3 支持焦点通知，**只有 OS3 才真正支持超级岛**。同一个 param
+     * 在 OS2 上只会被渲染成一张焦点卡片，排查「岛上没有内容」时这是第一个要看的值。
+     */
+    fun focusProtocolVersion(context: Context): Int = runCatching {
+        android.provider.Settings.System.getInt(
+            context.contentResolver,
+            "notification_focus_protocol",
+            0,
+        )
+    }.getOrDefault(0)
+
     fun isShizukuAvailable(): Boolean =
         ShizukuManager.isShizukuRunning() && ShizukuManager.checkSelfPermission()
 
@@ -113,7 +128,12 @@ object BatteryIslandHelper {
      * 记录中（[RecorderState.Recording]）已有 ChargeRecordService 的实况通知(1001)，
      * 兜底不重复发；岛则与记录通知并存（岛看电量/功率，记录通知带「结束并保存」）。
      */
-    fun onSample(context: Context, sample: BatterySample, enabled: Boolean) {
+    fun onSample(context: Context, sample: BatterySample, enabled: Boolean, notice: Boolean = true) {
+        // 「插电电量提醒」关掉时这类通知一条都不该出现（记录通知是另一回事，不受它管）
+        if (!notice) {
+            cancel(context)
+            return
+        }
         if (!sample.isCharging) {
             cancel(context)
             return
@@ -180,6 +200,10 @@ object BatteryIslandHelper {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setAutoCancel(false)
+            // 锁屏必须能看见内容：默认的 VISIBILITY_PRIVATE 在「锁屏通知内容」设为隐藏时
+            // 会被系统整条脱敏 —— 卡片壳还在（黑底圆角），里面的字全没了，
+            // 表现就是「锁屏上是张空黑卡片、没有信息」。电量/功率不属于敏感信息，直接 PUBLIC。
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
             // 每 5s 都会重发一次做数据刷新：只要不重新提示（不响铃/不震动）。
             // 大岛不会重弹，因为后续 param 里 enableFloat=false。
             .setOnlyAlertOnce(true)
@@ -192,8 +216,11 @@ object BatteryIslandHelper {
         }
         builder.addExtras(Bundle().apply { putBundle("miui.focus.pics", picsBundle) })
 
+        val params = buildIslandParams(context, sample, firstPop)
+        // 每次新的充电会话按一次完整参数：出问题时这行日志能直接看出「系统收到了什么」
+        if (firstPop) Log.i(TAG, "焦点协议=${focusProtocolVersion(context)} 岛参数=$params")
         val notification = builder.build()
-        notification.extras.putString("miui.focus.param", buildIslandParams(sample, firstPop))
+        notification.extras.putString("miui.focus.param", params)
         return notification
     }
 
@@ -329,8 +356,38 @@ object BatteryIslandHelper {
         }
     }
 
+    /**
+     * 岛通知的 `sequence`：系统拿它判「这条更新是不是比手上的旧」，判旧就整条丢弃。
+     *
+     * 现场证据（SystemUI 日志，焦点通知名为 FocusNotifPreHandler）：
+     * `filterOut old 0|com.smalljelly.batterydata|2001|null|10351, 1795692554<1795692554`
+     * ——新序号和系统记住的旧序号相等，于是这次更新被丢掉。丢弃是**整条**丢，
+     * 卡片内容不会跟着变，只会停在建卡那一刻的样子（表现为「黑卡片里一个字都没有」）。
+     *
+     * 为什么会相等/变小：以前序号是 `AtomicLong(currentTimeMillis() / 1000)`，进程启动时取
+     * 当前秒数、之后每发一次 +1。发得比时钟快（前台页面 10s 一次 +
+     * 服务 5s 一次 + 每次接管前台都 resetThrottle 补发）计数器就会跑到真实时间前面；
+     * 进程被杀（HyperOS 常态）后重建，序号又从「当前秒数」重新起算 —— 于是新值恒不大于
+     * 系统记住的旧值，之后每一条更新都被判旧，岛/焦点卡片就永远刷不出内容。
+     *
+     * 现在把「下一可用序号」落到 SharedPreferences，取 max(当前毫秒, 上次+1)：
+     * 跨进程严格递增；用毫秒也让升级前的秒级旧值一定更小，不会升级后又卡一次。
+     */
+    private fun nextSequence(context: Context): Long = synchronized(sequenceLock) {
+        val prefs = context.applicationContext
+            .getSharedPreferences(SEQ_PREFS, Context.MODE_PRIVATE)
+        val last = prefs.getLong(SEQ_KEY, 0L)
+        val next = maxOf(System.currentTimeMillis(), last + 1)
+        prefs.edit().putLong(SEQ_KEY, next).apply()
+        next
+    }
+
     /** 超级岛参数 JSON：缩略态左电量右功率，展开态温度/预计充满。结构对齐官方 param_v2。 */
-    private fun buildIslandParams(sample: BatterySample, firstPop: Boolean): String {
+    private fun buildIslandParams(
+        context: Context,
+        sample: BatterySample,
+        firstPop: Boolean,
+    ): String {
         val powerText = sample.powerW?.let { "${it.toInt()}W" } ?: "充电中"
         val tempText = sample.temperatureC?.let { String.format(java.util.Locale.US, "%.1f°C", it) } ?: ""
         // 记录中：岛显示这次记录的状态（时长 / 充入电能），而不是通用的"预计充满"。
@@ -362,7 +419,7 @@ object BatteryIslandHelper {
             if (firstPop) put("islandFirstFloat", true)
             put("updatable", true)
             put("reopen", "reopen")
-            put("sequence", sequenceCounter.incrementAndGet())
+            put("sequence", nextSequence(context))
             put("aodTitle", if (recording != null) "记录中 ${sample.level}%" else "充电中 ${sample.level}%")
             // OS2 状态栏焦点文案（官方推荐显式传）
             put("ticker", if (recording != null) "充电记录中 ${sample.level}%" else "充电中 $powerText")

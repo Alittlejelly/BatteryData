@@ -114,7 +114,8 @@ object ChargeRecorder {
         }
         val islandKeepAlive = _state.value is RecorderState.Idle && run {
             val sample = BatteryRepository(ctx).snapshot()
-            sample.isCharging && BatterySettings(ctx).islandEnabled()
+            val settings = BatterySettings(ctx)
+            sample.isCharging && settings.islandEnabled() && settings.chargeNoticeEnabled()
         }
         if (_state.value !is RecorderState.Idle || islandKeepAlive) startService(ctx)
     }
@@ -221,10 +222,12 @@ object ChargeRecorder {
         // 超级岛：与记录状态机无关，只要采样就驱动——充电中更新岛，非充电收起。
         // 前台页面与前台服务都会喂采样，故 App 打开或记录中时岛持续刷新。
         appContext?.let { ctx ->
+            val settings = BatterySettings(ctx)
             com.smalljelly.batterydata.island.BatteryIslandHelper.onSample(
                 ctx,
                 sample,
-                BatterySettings(ctx).islandEnabled(),
+                settings.islandEnabled(),
+                settings.chargeNoticeEnabled(),
             )
         }
         when (val current = _state.value) {

@@ -1,13 +1,6 @@
 package com.smalljelly.batterydata.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,21 +29,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import com.haooz.nexioui.card.Card
 import com.haooz.nexioui.icon.NexioIcons
 import com.haooz.nexioui.icon.basic.ArrowRight
-import com.haooz.nexioui.scaffold.Scaffold
+import com.haooz.nexioui.overscroll.overScrollVertical
 import com.haooz.nexioui.text.NexioText
 import com.haooz.nexioui.theme.NexioTheme
-import com.haooz.nexioui.topappbar.CollapsibleTopAppBarDefaults
 import com.haooz.softglass.SoftGlassTheme
 import com.haooz.softglass.backdrop.backdrops.layerBackdrop
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
@@ -62,14 +51,15 @@ import com.smalljelly.batterydata.data.ChargeReportAnalyzer
 import com.smalljelly.batterydata.data.ScreenTimeStats
 import com.smalljelly.batterydata.data.ScreenTimeTracker
 import com.smalljelly.batterydata.data.healthRatingText
+import com.smalljelly.batterydata.ui.components.AppPage
 import com.smalljelly.batterydata.ui.components.BatteryHealthCard
 import com.smalljelly.batterydata.ui.components.BatteryInsightsCard
 import com.smalljelly.batterydata.ui.components.HealthTrendCard
 import com.smalljelly.batterydata.ui.components.InfoRow
 import com.smalljelly.batterydata.ui.components.InnerDivider
-import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.NexioTopContentSpacer
+import com.smalljelly.batterydata.ui.components.SlideInHost
 import com.smalljelly.batterydata.ui.components.capacityText
 import com.smalljelly.batterydata.ui.components.designSourceSuffix
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -99,6 +89,11 @@ fun BatteryInfoScreen() {
     }
 
     var subPage by remember { mutableStateOf<BatterySubPage?>(null) }
+    // 退出动画期间继续渲染"最后那一页"：直接喂 null 会让页面在 visible=false 那一帧
+    // 瞬间消失，滑出去的只是空壳 —— 用户看到的就是"退出闪一下"。
+    var displayPage by remember { mutableStateOf<BatterySubPage?>(null) }
+    // 同步赋值：用 LaunchedEffect 会让进入动画的第一帧先渲染上一次的旧页
+    if (subPage != null && displayPage != subPage) displayPage = subPage
 
     val scrollState = rememberScrollState()
     val topBarState = rememberNexioTopBarState()
@@ -111,68 +106,74 @@ fun BatteryInfoScreen() {
         isDark = isSystemInDarkTheme(),
         hasWallpaper = false,
     ) {
-        // 只保留一层采样层：二级页必须与它同级，不能嵌在 layerBackdrop 里面，
+        // 二级页用 NexioSchedule 那套侧滑载入：整屏从右侧推入，
+        // 一级页被推开（视差）并压暗；转场中二级页裁屏幕圆角，像一张卡片。
+        //
+        // 采样层只能有一层：二级页不能嵌在 layerBackdrop 里面 ——
         // 否则采样树会包含采样者自己，HWUI 递归准备渲染树时直接爆栈（SIGSEGV）。
-        Box(Modifier.fillMaxSize()) {
-            // 一级页：健康总览 + 入口
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                        .background(NexioTheme.colorScheme.background),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 16.dp),
-                ) {
-                    NexioTopContentSpacer(topBarState)
-                    Spacer(Modifier.height(8.dp))
-                    HealthSummaryCard(sample = sample)
-                    Spacer(Modifier.height(12.dp))
-                    BatteryEntryCard(
-                        title = "健康趋势",
-                        summary = if (healthPoints.size >= 2) {
-                            "已积累 ${healthPoints.size} 个有效充电点"
-                        } else {
-                            "完成 2 次以上有效充电后显示"
-                        },
-                        onClick = { subPage = BatterySubPage.Trend },
+        SlideInHost(
+            visible = subPage != null,
+            baseContent = {
+                // Box 作用域：顶栏要用 align(TopCenter)
+                Box(Modifier.fillMaxSize()) {
+                    // 一级页：健康总览 + 入口
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            // 采样层必须在底色之前：layerBackdrop 只录它内层，
+                            // 底色写在前面就录在图层外，顶栏玻璃会只剩一块灰板
+                            .layerBackdrop(backdrop)
+                            .background(NexioTheme.colorScheme.background),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
+                                // 两端弹簧回弹 + 关掉 foundation 自带的 overscroll（叠加会抖）
+                                .overScrollVertical()
+                                .verticalScroll(scrollState, overscrollEffect = null)
+                                .padding(horizontal = 16.dp),
+                        ) {
+                            NexioTopContentSpacer(topBarState)
+                            Spacer(Modifier.height(8.dp))
+                            HealthSummaryCard(sample = sample)
+                            Spacer(Modifier.height(12.dp))
+                            BatteryEntryCard(
+                                title = "健康趋势",
+                                summary = if (healthPoints.size >= 2) {
+                                    "已积累 ${healthPoints.size} 个有效充电点"
+                                } else {
+                                    "完成 2 次以上有效充电后显示"
+                                },
+                                onClick = { subPage = BatterySubPage.Trend },
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            BatteryEntryCard(
+                                title = "今日耗电洞察",
+                                summary = insightsSummary(screenStats),
+                                onClick = { subPage = BatterySubPage.Insights },
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            BatteryEntryCard(
+                                title = "电池信息",
+                                summary = "容量 · 循环 · 技术 · 采样",
+                                onClick = { subPage = BatterySubPage.Info },
+                            )
+                            Spacer(Modifier.height(28.dp + 76.dp))
+                        }
+                    }
+
+                    NexioTopBar(
+                        state = topBarState,
+                        title = "电池",
+                        largeTitle = "电池健康",
+                        backdrop = backdrop,
+                        modifier = Modifier.align(Alignment.TopCenter),
                     )
-                    Spacer(Modifier.height(10.dp))
-                    BatteryEntryCard(
-                        title = "今日耗电洞察",
-                        summary = insightsSummary(screenStats),
-                        onClick = { subPage = BatterySubPage.Insights },
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    BatteryEntryCard(
-                        title = "电池信息",
-                        summary = "容量 · 循环 · 技术 · 采样",
-                        onClick = { subPage = BatterySubPage.Info },
-                    )
-                    Spacer(Modifier.height(28.dp + 76.dp))
                 }
-            }
-
-            NexioTopBar(
-                state = topBarState,
-                title = "电池",
-                largeTitle = "电池健康",
-                backdrop = backdrop,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
-
-            // 二级页：右侧推入，返回键和左上按钮都能退出
-            AnimatedVisibility(
-                visible = subPage != null,
-                enter = slideInHorizontally(spring(dampingRatio = 0.92f, stiffness = 420f)) { it / 5 } +
-                    fadeIn(tween(160)),
-                exit = slideOutHorizontally(tween(220)) { it / 5 } + fadeOut(tween(160)),
-                modifier = Modifier.zIndex(2f),
-            ) {
-                val page = subPage
+            },
+            overlayContent = {
+                val page = displayPage
                 if (page != null) {
                     BatterySubPageScreen(
                         page = page,
@@ -182,8 +183,8 @@ fun BatteryInfoScreen() {
                         onBack = { subPage = null },
                     )
                 }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -308,7 +309,7 @@ private fun BatteryEntryCard(
     }
 }
 
-/** 电池页的二级详情页：沿用关于页的顶栏与右侧推入观感。 */
+/** 电池页的二级详情页：走统一骨架（侧滑载入 + 渐进模糊顶栏 + 回弹 + 预见式返回）。 */
 @Composable
 private fun BatterySubPageScreen(
     page: BatterySubPage,
@@ -317,59 +318,20 @@ private fun BatterySubPageScreen(
     healthPoints: List<com.smalljelly.batterydata.data.HealthTrendPoint>,
     onBack: () -> Unit,
 ) {
-    val colors = NexioTheme.colorScheme
-    val scrollState = rememberScrollState()
-    val topBarState = rememberNexioTopBarState()
-    val backdrop = rememberLayerBackdrop()
-
-    Scaffold(
-        topBar = {
-            NexioTopBar(
-                state = topBarState,
-                title = page.title,
-                largeTitle = page.title,
-                backdrop = backdrop,
-                navigation = { backdropAlpha, shadowAlpha ->
-                    Box(Modifier.rotate(180f)) {
-                        NexioIconButton(
-                            onClick = onBack,
-                            backdrop = backdrop,
-                            icon = NexioIcons.Basic.ArrowRight,
-                            contentDescription = "返回",
-                            backdropAlpha = backdropAlpha,
-                            shadowAlpha = shadowAlpha,
-                            iconTint = colors.onBackground,
-                        )
-                    }
-                },
-            )
-        },
-        containerColor = colors.background,
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
-    ) { innerPadding ->
-        val measuredTop = innerPadding.calculateTopPadding()
-        val contentTopInset =
-            (if (measuredTop > 0.dp) measuredTop else CollapsibleTopAppBarDefaults.CollapsedHeight) + 8.dp
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.background)
-                .nestedScroll(topBarState.scrollBehavior.nestedScrollConnection)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp),
-        ) {
-            Spacer(Modifier.height(contentTopInset))
-            when (page) {
-                BatterySubPage.Trend -> HealthTrendCard(points = healthPoints)
-                BatterySubPage.Insights -> BatteryInsightsCard(stats = stats)
-                BatterySubPage.Info -> {
-                    BatteryHealthCard(sample = sample)
-                    Spacer(Modifier.height(12.dp))
-                    BatteryInfoCard(sample)
-                }
+    // 让位由 AppPage 按 Scaffold 实测的顶栏高度给，和记录页同一套算法。
+    AppPage(
+        title = page.title,
+        largeTitle = page.title,
+        onBack = onBack,
+    ) {
+        when (page) {
+            BatterySubPage.Trend -> HealthTrendCard(points = healthPoints)
+            BatterySubPage.Insights -> BatteryInsightsCard(stats = stats)
+            BatterySubPage.Info -> {
+                BatteryHealthCard(sample = sample)
+                Spacer(Modifier.height(12.dp))
+                BatteryInfoCard(sample)
             }
-            Spacer(Modifier.height(28.dp + 76.dp))
         }
     }
 }

@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.app.ServiceCompat
@@ -76,8 +77,9 @@ class ChargeRecordService : Service() {
             state !is RecorderState.Idle -> startForegroundWith(state)
             islandAllowed(initial) -> pinIsland(initial)
             else -> {
-                // 既没记录也不满足岛模式（误启动 / 重启时已拔电）：走一帧占位就退
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, idlePlaceholder(), 0)
+                // 既没记录也不满足岛模式（误启动 / 重启时已拔电）：走一帧占位就退。
+                // 占位这一帧同样必须带 type（见 enterForeground），传 0 会直接崩进程
+                enterForeground(NOTIFICATION_ID, idlePlaceholder())
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
@@ -90,10 +92,7 @@ class ChargeRecordService : Service() {
             if (pinnedId == 0 || pinnedId == BatteryIslandHelper.ISLAND_NOTIFICATION_ID ||
                 pinnedId == BatteryIslandHelper.LIVE_NOTIFICATION_ID
             ) {
-                runCatching {
-                    ServiceCompat.startForeground(this, id, notification, fgsType())
-                    pinnedId = id
-                }
+                enterForeground(id, notification)
             }
         }
 
@@ -137,9 +136,7 @@ class ChargeRecordService : Service() {
                         // 岛不可用：记录通知接管前台
                         val notification = buildNotification(state)
                         if (notification != null) {
-                            runCatching {
-                                ServiceCompat.startForeground(this@ChargeRecordService, NOTIFICATION_ID, notification, fgsType())
-                                pinnedId = NOTIFICATION_ID
+                            if (enterForeground(NOTIFICATION_ID, notification)) {
                                 getSystemService(NotificationManager::class.java)
                                     ?.cancel(BatteryIslandHelper.LIVE_NOTIFICATION_ID)
                             }
@@ -185,9 +182,12 @@ class ChargeRecordService : Service() {
         super.onDestroy()
     }
 
-    /** 岛模式门控：正在充电 + 超级岛开关开。充电时插电，保活零电量成本。 */
+    /**
+     * 岛模式门控：正在充电 + 超级岛开关开 + 插电电量提醒开着。
+     * 充电时插电，保活零电量成本。
+     */
     private fun islandAllowed(sample: BatterySample): Boolean =
-        sample.isCharging && settings.islandEnabled()
+        sample.isCharging && settings.islandEnabled() && settings.chargeNoticeEnabled()
 
     /**
      * 把岛（或谷歌兜底）通知钉成前台通知，并清掉可能残留的 1001 记录通知。
@@ -199,9 +199,7 @@ class ChargeRecordService : Service() {
         // resetThrottle 保证首个采样 tick 必走 bypass 发送一次，岛在掐 XMSF 网络的机型上也能渲染
         BatteryIslandHelper.resetThrottle()
         val (id, notification) = BatteryIslandHelper.currentNotification(applicationContext, sample)
-        runCatching {
-            ServiceCompat.startForeground(this, id, notification, fgsType())
-            pinnedId = id
+        if (enterForeground(id, notification)) {
             getSystemService(NotificationManager::class.java)?.let { manager ->
                 manager.cancel(NOTIFICATION_ID)
                 if (id != BatteryIslandHelper.LIVE_NOTIFICATION_ID) {
@@ -213,6 +211,27 @@ class ChargeRecordService : Service() {
 
     private fun fgsType(): Int =
         if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+
+    /**
+     * 进入前台，**永远带具体 type**。
+     *
+     * targetSdk 34+ 的 ROM 不允许 `startForeground(id, n, type = 0)`：type none 会被直接拒，
+     * 抛 [android.app.InvalidForegroundServiceTypeException] 并把整个进程带走（不是本服务，
+     * 是进程），现场崩溃日志：
+     * `Starting FGS with type none ... targetSDK=37 has been prohibited`
+     * `at ChargeRecordService.onCreate(ChargeRecordService.kt:80)`。
+     * 之前两处「占一帧再退出」的路径传的是字面量 0，等于把误启动（插电瞬间状态还没切到
+     * CHARGING、job 补试的前几次）变成了一次必崩 —— 进程一崩，岛和记录都没了。
+     *
+     * @return 是否真的进了前台
+     */
+    private fun enterForeground(id: Int, notification: Notification): Boolean {
+        val ok = runCatching {
+            ServiceCompat.startForeground(this, id, notification, fgsType())
+        }.onFailure { Log.e(TAG, "startForeground 失败 id=$id", it) }.isSuccess
+        if (ok) pinnedId = id
+        return ok
+    }
 
     // ---------------------------------------------------------------- 通知
 
@@ -234,13 +253,16 @@ class ChargeRecordService : Service() {
         if (notification == null) {
             // 没有进行中的记录：撤掉通知并退出（startForeground 仍要先调一次，
             // 否则由 startForegroundService 拉起的服务会触发"未进前台"的崩溃）
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, idlePlaceholder(), 0)
+            enterForeground(NOTIFICATION_ID, idlePlaceholder())
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType())
-        pinnedId = NOTIFICATION_ID
+        if (!enterForeground(NOTIFICATION_ID, notification)) {
+            // 进不了前台就别赖着：留着只会被系统按"未进前台"杀掉整个进程
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     /** 只在"误启动"时用一帧，随即被撤掉 */
@@ -414,6 +436,7 @@ class ChargeRecordService : Service() {
         var isRunning: Boolean = false
             private set
 
+        private const val TAG = "ChargeRecordService"
         private const val CHANNEL_ID = "charge_recording"
         private const val NOTIFICATION_ID = 1001
         private const val STOP_REQUEST = 11

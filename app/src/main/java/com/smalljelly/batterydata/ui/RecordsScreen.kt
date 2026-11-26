@@ -161,14 +161,11 @@ fun RecordsScreen(
     recorder: RecorderState,
     /** 这一页是否真正显示在前台（Pager 两页始终组合，动画得等切过来再播） */
     isActive: Boolean,
-    menuOpen: Boolean,
-    onMenuOpenChange: (Boolean) -> Unit,
     onStartRecording: () -> Unit,
     onCancelRecording: () -> Unit,
     onFinishRecording: () -> Unit,
     onDelete: (Long) -> Unit,
     onOpenRecord: (ChargeRecord, Rect, GraphicsLayer) -> Unit,
-    onOpenAbout: () -> Unit,
     onModalVisibleChange: (Boolean) -> Unit,
     onTopBarPressChange: (Boolean) -> Unit,
 ) {
@@ -192,51 +189,6 @@ fun RecordsScreen(
 
     val density = LocalDensity.current
 
-    // menuOpen 由容器层持有：菜单展开时底栏依然能点，点它就先收菜单再切页
-    var menuMounted by remember { mutableStateOf(false) }
-    // 页面三点钮的过渡态：true=进入隐藏方向，false=面板已退场、按钮正常显示
-    var menuIconHidden by remember { mutableStateOf(false) }
-    var menuFraction by remember { mutableFloatStateOf(0f) }
-    var openAboutAfterMenu by remember { mutableStateOf(false) }
-    var openCapacityAfterMenu by remember { mutableStateOf(false) }
-    var showManualCapacityDialog by remember { mutableStateOf(false) }
-
-    // 菜单条目：点击先收菜单，等收起动画播完再切页 / 弹对话框
-    val currentOnMenuOpenChange by rememberUpdatedState(onMenuOpenChange)
-    val menuEntry = remember {
-        DropdownEntry(
-            items = listOf(
-                DropdownItem(
-                    text = "关于",
-                    onClick = {
-                        openAboutAfterMenu = true
-                        currentOnMenuOpenChange(false)
-                    },
-                ),
-                DropdownItem(
-                    text = "手动设置电池容量",
-                    onClick = {
-                        openCapacityAfterMenu = true
-                        currentOnMenuOpenChange(false)
-                    },
-                ),
-            ),
-        )
-    }
-    // 下拉收起态就是这颗按钮：库按这个尺寸把面板缩回触发区
-    val menuButtonSize = remember(density) {
-        val px = with(density) { TopBarActionSize.roundToPx() }
-        IntSize(px, px)
-    }
-
-    // 展开即进入淡出方向：f=0 时按钮仍可见（与浮层收起态重合），随 fraction 迅速淡出，
-    // 不空帧、玻璃采到的残留也是淡出中的（同 NexioSchedule / 首页）
-    LaunchedEffect(menuOpen) {
-        if (menuOpen) {
-            menuMounted = true
-            menuIconHidden = true
-        }
-    }
 
     // 多选删除：长按卡片进入选择态，底部换成只有「删除」的悬浮操作栏
     var selectionMode by remember { mutableStateOf(false) }
@@ -297,7 +249,6 @@ fun RecordsScreen(
         onStartRecording()
     }
 
-    BackHandler(enabled = menuOpen || menuMounted) { onMenuOpenChange(false) }
     // 选择态下返回键退出选择（优先于切页）
     BackHandler(enabled = selectionMode) {
         selectionMode = false
@@ -305,8 +256,7 @@ fun RecordsScreen(
     }
 
     // 任何页内弹窗 / 选择态打开时，底栏让位，避免和悬浮操作栏叠在一起
-    val dialogOpen = confirmDelete || showManualCapacityDialog
-    val bottomHidden = dialogOpen || selectionMode
+    val bottomHidden = confirmDelete || selectionMode
     LaunchedEffect(bottomHidden) { onModalVisibleChange(bottomHidden) }
 
     val recording = recorder as? RecorderState.Recording
@@ -344,82 +294,6 @@ fun RecordsScreen(
                                 )
                             }
                             // 选择态只留顶部标题，操作都在底部那条删除栏里
-                            if (!selectionMode) Box {
-                                // 两态玻璃钮 + 延后两帧隐藏（见 menuIconHidden），与首页三点钮同款交接
-                                NexioIconButton(
-                                    onClick = {
-                                        menuMounted = true
-                                        onMenuOpenChange(true)
-                                    },
-                                    backdrop = backdrop,
-                                    icon = MiuixIcons.More,
-                                    contentDescription = "更多",
-                                    backdropAlpha = backdropAlpha,
-                                    shadowAlpha = shadowAlpha,
-                                    iconTint = colors.onBackground,
-                                    enabled = !menuOpen,
-                                    // 展开随 fraction 迅速淡出；退场保持隐藏，onDismissFinished 才回 1
-                                    modifier = Modifier
-                                        .graphicsLayer {
-                                            alpha = if (!menuIconHidden) 1f
-                                                else if (menuOpen) (1f - menuFraction / 0.18f).coerceIn(0f, 1f)
-                                                else 0f
-                                        }
-                                        // 按住/拖这颗按钮期间禁用横滑切页
-                                        .reportPressTo(onTopBarPressChange),
-                                )
-                                // 库的浮层下拉：挂到最外层宿主，落在被采样的 Scaffold 之外
-                                OverlayDropdownPopup(
-                                    entry = menuEntry,
-                                    show = menuOpen,
-                                    onDismiss = { onMenuOpenChange(false) },
-                                    onDismissFinished = {
-                                        menuMounted = false
-                                        menuIconHidden = false
-                                        menuFraction = 0f
-                                        if (openAboutAfterMenu) {
-                                            openAboutAfterMenu = false
-                                            onOpenAbout()
-                                        } else if (openCapacityAfterMenu) {
-                                            openCapacityAfterMenu = false
-                                            // 记录页常驻组合，首次快照可能早于自动识别完成；
-                                            // 打开弹窗前重新取一次，避免“当前”显示旧值
-                                            designSample = repository.snapshot()
-                                            showManualCapacityDialog = true
-                                        }
-                                    },
-                                    maxHeight = null,
-                                    dropdownColors = menuDropdownColors(),
-                                    renderInRootScaffold = true,
-                                    collapseOnSelection = false,
-                                    onFractionProgress = { menuFraction = it },
-                                    // 跟手滑选：按住面板上下滑动连续选择
-                                    dragSelectState = remember { DropdownPanelDragSelectState(maskMode = DropdownMaskMode.Sliding) },
-                                    liquidGlassBackdrop = if (AppMaterial.current.panelBlurDp > 0.dp) {
-                                        pageBackdrop
-                                    } else {
-                                        null
-                                    },
-                                    collapseSize = menuButtonSize,
-                                    collapseContent = {
-                                        // 同首页：42dp Box 居中 22dp 图标，与页面按钮逐像素重合，
-                                        // 避免库把裸图标钉在面板右上角导致归位跳动闪烁
-                                        Box(
-                                            modifier = Modifier.size(TopBarActionSize),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Icon(
-                                                imageVector = MiuixIcons.More,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(22.dp),
-                                                tint = colors.onBackground,
-                                            )
-                                        }
-                                    },
-                                    anchorOffsetX = 0.dp,
-                                    anchorOffsetY = 0.dp,
-                                )
-                            }
                         },
                     )
                 },
@@ -671,22 +545,6 @@ fun RecordsScreen(
                     }
                 }
 
-                ManualCapacityDialog(
-                    show = showManualCapacityDialog,
-                    manualCapacity = settings.manualDesignCapacityMah(),
-                    currentDesign = capacityText(designSample.designCapacityMah) +
-                        designSourceSuffix(designSample.designSource),
-                    backdrop = backdrop,
-                    onSet = { value ->
-                        settings.setManualDesignCapacityMah(value)
-                        designSample = repository.snapshot()
-                        showManualCapacityDialog = false
-                    },
-                    onDismiss = { showManualCapacityDialog = false },
-                )
-
-            // 菜单已由库的 OverlayDropdownPopup 渲染到窗口弹层（见顶栏 actions），
-            // 这里不再挂第二棵树
 
             // 选择态的悬浮操作栏：照 Nexio 编辑课表页，只留一个「删除」。
             // 放在被采样的 Scaffold 之外才能安全采样 pageBackdrop（底栏玻璃同款）

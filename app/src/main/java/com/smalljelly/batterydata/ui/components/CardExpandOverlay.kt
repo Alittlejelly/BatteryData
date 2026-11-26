@@ -67,6 +67,14 @@ fun CardExpandOverlay(
     snapshot: GraphicsLayer? = null,
     /** 可选的外部进度，方便宿主读同一条值（页面背景虚化就靠它） */
     progress: Animatable<Float, AnimationVector1D>? = null,
+    /**
+     * 预见式返回是否开启（读设置的全局状态）。
+     *
+     * 卡片展开这套形变由库自己接管返回手势 —— 它的跟手预览是**独立于** AppPage 的，
+     * 所以开关必须单独传进来，否则「关掉预见式动画」后从记录进详情、
+     * 再按返回照样跟手缩回去，看起来就是开关没生效。
+     */
+    predictiveBack: () -> Boolean = { true },
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -104,6 +112,8 @@ fun CardExpandOverlay(
             onBackStart = {},
             // 库自己接管返回（含预测性返回）：收起动画播完才回这里
             onBack = { currentDismissed() },
+            // 关闭「预见式返回」时，卡片形变本身也不再跟手，只做普通收起
+            predictiveBackEnabled = predictiveBack,
         )
 
         // 宿主侧的外部进度：把库的进度镜像出去，页面背景虚化跟着同一条曲线
