@@ -10,6 +10,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.unit.dp
+import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.ui.BatteryScreen
 import com.smalljelly.batterydata.ui.theme.AppMaterial
@@ -27,6 +28,14 @@ class MainActivity : ComponentActivity() {
         )
         // 恢复上次没记完的充电过程（进程被杀 / 手机重启后也能接着记）
         ChargeRecorder.ensure(this)
+        // 上次开着实时悬浮窗就恢复它：进程被杀后再次打开应用，窗口能自己回来。
+        // 服务内部已做异常隔离（失败只退出、不会带崩进程），这里只负责按设置拉起。
+        runCatching {
+            val overlaySettings = BatterySettings(this)
+            if (overlaySettings.overlayEnabled() && android.provider.Settings.canDrawOverlays(this)) {
+                com.smalljelly.batterydata.data.BatteryOverlayService.start(this)
+            }
+        }
         // 排期充电触发 job：进程被杀后下次插电由系统拉起复活超级岛（见 ChargeKeepAliveJobService）
         com.smalljelly.batterydata.data.ChargeKeepAliveJobService.schedule(this)
         // Shizuku / 超级岛：绑定高权限服务（超级岛通知 bypass XMSF 网络用）

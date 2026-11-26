@@ -66,6 +66,8 @@ import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
 import com.haooz.softglass.backdrop.drawBackdrop
 import com.haooz.softglass.backdrop.effects.blur
 import com.smalljelly.batterydata.data.ChargeRecord
+import com.smalljelly.batterydata.data.ChargeReportAnalyzer
+import com.smalljelly.batterydata.ui.components.ChargeReportCard
 import com.smalljelly.batterydata.data.UiDiagnostics
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.TopBarActionSize
@@ -206,6 +208,8 @@ fun ChargeDetailScreen(
                     .onSizeChanged { if (it.height != contentPx) contentPx = it.height },
             ) {
                 SummaryCard(record)
+                Spacer(Modifier.height(12.dp))
+                ChargeReportCard(report = remember(record) { ChargeReportAnalyzer.analyze(record) })
                 Spacer(Modifier.height(12.dp))
                 CurveCard(
                     record = record,

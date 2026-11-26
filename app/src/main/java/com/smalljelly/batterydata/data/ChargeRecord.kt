@@ -34,6 +34,16 @@ data class ChargeRecord(
     val powerSeries: List<Float> = emptyList(),
     val currentSeries: List<Float> = emptyList(),
     val voltageSeries: List<Float> = emptyList(),
+    /** 每个曲线点相对开始时间的偏移毫秒，与三条 series 等长（旧记录为空） */
+    val seriesTimesMs: List<Long> = emptyList(),
+    /** 每个曲线点的温度℃，与 series 等长（旧记录为空） */
+    val temperatureSeries: List<Float> = emptyList(),
+    /** 本次峰值功率（W），旧记录可从 powerSeries 回推 */
+    val peakPowerW: Float? = null,
+    /** 记录类型：charge=充电 / discharge=放电 / test=耗电测试 */
+    val recordType: String = "charge",
+    /** 耗电测试的场景名，如"游戏""视频""待机" */
+    val scenarioName: String? = null,
 ) {
     val hasSeries: Boolean get() = powerSeries.isNotEmpty() || voltageSeries.isNotEmpty()
 
@@ -51,6 +61,13 @@ data class ChargeRecord(
         if (powerSeries.isNotEmpty()) put("powerSeries", powerSeries.toJsonArray())
         if (currentSeries.isNotEmpty()) put("currentSeries", currentSeries.toJsonArray())
         if (voltageSeries.isNotEmpty()) put("voltageSeries", voltageSeries.toJsonArray())
+        if (seriesTimesMs.isNotEmpty()) {
+            put("seriesTimes", JSONArray().apply { seriesTimesMs.forEach { put(it) } })
+        }
+        if (temperatureSeries.isNotEmpty()) put("tempSeries", temperatureSeries.toJsonArray())
+        peakPowerW?.let { put("peakPower", it) }
+        if (recordType != "charge") put("type", recordType)
+        scenarioName?.let { put("scenario", it) }
     }
 
     companion object {
@@ -68,6 +85,11 @@ data class ChargeRecord(
             powerSeries = json.optJSONArray("powerSeries").toFloatList(),
             currentSeries = json.optJSONArray("currentSeries").toFloatList(),
             voltageSeries = json.optJSONArray("voltageSeries").toFloatList(),
+            seriesTimesMs = json.optJSONArray("seriesTimes").toLongList(),
+            temperatureSeries = json.optJSONArray("tempSeries").toFloatList(),
+            peakPowerW = if (json.has("peakPower")) json.optDouble("peakPower").toFloat() else null,
+            recordType = json.optString("type", "charge").ifEmpty { "charge" },
+            scenarioName = json.optString("scenario").takeIf { it.isNotEmpty() },
         )
     }
 }
@@ -83,6 +105,15 @@ private fun JSONArray?.toFloatList(): List<Float> {
     return buildList {
         for (i in 0 until length()) {
             add(optDouble(i).toFloat())
+        }
+    }
+}
+
+private fun JSONArray?.toLongList(): List<Long> {
+    if (this == null) return emptyList()
+    return buildList {
+        for (i in 0 until length()) {
+            add(optLong(i))
         }
     }
 }

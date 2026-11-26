@@ -53,6 +53,20 @@ class BatterySettings(context: Context) {
         prefs.edit().putBoolean(KEY_ISLAND_ENABLED, enabled).apply()
     }
 
+    /** 自动充电记录：插电自动开始、拔电自动保存，默认关闭 */
+    fun autoRecordEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_RECORD, false)
+
+    fun setAutoRecordEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_RECORD, enabled).apply()
+    }
+
+    /** 实时电量悬浮窗，默认关闭 */
+    fun overlayEnabled(): Boolean = prefs.getBoolean(KEY_OVERLAY, false)
+
+    fun setOverlayEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_OVERLAY, enabled).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "battery_settings"
         const val KEY_MANUAL_DESIGN_MAH = "manual_design_capacity_mah"
@@ -60,5 +74,7 @@ class BatterySettings(context: Context) {
         const val KEY_UPDATE_SOURCE = "update_source"
         const val KEY_MATERIAL_LEVEL = "material_level"
         const val KEY_ISLAND_ENABLED = "island_enabled"
+        const val KEY_AUTO_RECORD = "auto_record"
+        const val KEY_OVERLAY = "overlay"
     }
 }
