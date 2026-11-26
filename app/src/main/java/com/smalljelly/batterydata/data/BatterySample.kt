@@ -81,7 +81,11 @@ data class BatterySample(
             val design = designCapacityMah ?: return null
             val full = estimatedFullChargeMah ?: return null
             if (design <= 0f || full <= 0f) return null
-            return (full / design * 100f).coerceIn(0f, 100f)
+            // 双电芯机型可能一个节点按单芯报、另一个按整包报，比值会落在 50% 附近。
+            // 这种口径不一致算不出真实健康度，宁可显示未知，也不报一个吓人的假衰减。
+            val ratio = full / design
+            if (ratio < 0.5f) return null
+            return (ratio * 100f).coerceIn(0f, 100f)
         }
 
     /** 还剩多久 / 还有多久充满，单位分钟。 */

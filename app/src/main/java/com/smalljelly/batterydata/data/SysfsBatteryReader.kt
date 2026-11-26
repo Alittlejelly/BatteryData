@@ -29,54 +29,76 @@ internal class SysfsBatteryReader {
 
     private fun readNow(): Raw {
         val root = File("/sys/class/power_supply")
-        val dirs = root.listFiles()?.filter { it.isDirectory } ?: return Raw()
+        val dirs = root.listFiles()?.filter { it.isDirectory }.orEmpty()
         if (dirs.isEmpty()) return Raw()
 
-        // 电池节点可能叫 battery / bms / maxfuelgauge 等，先按 type 判断
-        val batteryDir = dirs.firstOrNull { dir ->
-            readValue(File(dir, "type"))?.contains("Battery", true) == true
-        } ?: dirs.firstOrNull { it.name.contains("batt", true) }
+        // 电池节点可能叫 battery / bms / maxfuelgauge 等，先按 type 判断。
+        // 目录顺序在不同 ROM 上不稳定，这里固定排序，避免每次采样读到的来源漂移。
+        val ordered = dirs.sortedWith(compareBy({ nodeRank(it) }, { it.name }))
 
-        val batteryProps = batteryDir?.let { loadProps(it) }.orEmpty()
-
-        fun value(vararg keys: String): String? {
-            // 1) 电池节点 uevent + 单文件
-            keys.forEach { key ->
-                batteryProps[key]?.let { if (it.isNotEmpty()) return it }
-                batteryDir?.let {
-                    readValue(File(it, key.lowercase()))?.let { v -> if (v.isNotEmpty()) return v }
-                }
-            }
-            // 2) 设计容量等常被厂商挂在 bms / fuelgauge 等非电池节点上，全局兜底扫描
-            dirs.forEach { dir ->
-                keys.forEach { key ->
-                    readValue(File(dir, key.lowercase()))?.let { v -> if (v.isNotEmpty()) return v }
-                    loadProps(dir)[key]?.let { v -> if (v.isNotEmpty()) return v }
-                }
-            }
-            return null
-        }
-
-        val fullCharge = value("POWER_SUPPLY_CHARGE_FULL", "CHARGE_FULL")
-            ?.toFloatOrNull()
-            ?.let { if (it > 10_000f) it / 1000f else it }
-            ?.takeIf { it > 100f }
-
-        val design = value(
-            "POWER_SUPPLY_CHARGE_FULL_DESIGN",
-            "CHARGE_FULL_DESIGN",
-            "POWER_SUPPLY_DESIGN_CAPACITY",
-            "DESIGN_CAPACITY",
-        )
-            ?.toFloatOrNull()
-            ?.let { if (it > 10_000f) it / 1000f else it }
-            ?.takeIf { it > 100f }
-
-        val cycles = value("POWER_SUPPLY_CYCLE_COUNT", "CYCLE_COUNT")
-            ?.toIntOrNull()
-            ?.takeIf { it >= 0 }
+        val fullCharge = readChannel(ordered, CHARGE_FULL_KEYS, AhUnit.MICRO)
+        val design = readChannel(ordered, DESIGN_KEYS, AhUnit.MICRO) ?: readChannel(ordered, VENDOR_DESIGN_KEYS, AhUnit.AUTO)
+        val cycles = readCycles(ordered)
 
         return Raw(fullChargeMah = fullCharge, designCapacityMah = design, cycleCount = cycles)
+    }
+
+    /** 电池节点优先，其次是厂商常挂容量的 bms / fuelgauge 一类节点。 */
+    private fun nodeRank(dir: File): Int {
+        val type = readValue(File(dir, "type")).orEmpty()
+        if (type.contains("Battery", ignoreCase = true)) return 0
+        val name = dir.name.lowercase()
+        return when {
+            name == "battery" -> 1
+            name.contains("batt") -> 2
+            name.contains("bms") || name.contains("fuel") || name.contains("gauge") -> 3
+            else -> 4
+        }
+    }
+
+    /**
+     * 按节点顺序、键顺序逐个尝试，跳过 0 / -1 / unknown / NaN / Infinity 等无效候选，
+     * 而不是遇到第一个“非空字符串”就返回。
+     */
+    private fun readChannel(dirs: List<File>, keys: List<String>, unit: AhUnit): Float? {
+        for (dir in dirs) {
+            val props = loadProps(dir)
+            for (key in keys) {
+                props[key]?.let { raw ->
+                    toMah(raw, unit)?.let { return it }
+                }
+                val file = File(dir, key.lowercase())
+                readValue(file)?.let { raw ->
+                    toMah(raw, unit)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun readCycles(dirs: List<File>): Int? {
+        for (dir in dirs) {
+            val props = loadProps(dir)
+            for (key in CYCLE_KEYS) {
+                val candidates = listOfNotNull(props[key], readValue(File(dir, key.lowercase())))
+                for (raw in candidates) {
+                    val value = raw.toIntOrNull() ?: continue
+                    if (value in 0..100_000) return value
+                }
+            }
+        }
+        return null
+    }
+
+    private fun toMah(raw: String, unit: AhUnit): Float? {
+        val value = raw.trim().toFloatOrNull()?.takeIf { it.isFinite() } ?: return null
+        if (value <= 0f) return null
+        // CHARGE_* 标准节点是 µAh；厂商 design_capacity 有的写 mAh 有的写 µAh，按量级判断。
+        val mah = when (unit) {
+            AhUnit.MICRO -> value / 1000f
+            AhUnit.AUTO -> if (value > 30_000f) value / 1000f else value
+        }
+        return mah.takeIf { it in MIN_SANE_MAH..MAX_SANE_MAH }
     }
 
     private fun loadProps(dir: File): Map<String, String> = runCatching {
@@ -92,7 +114,24 @@ internal class SysfsBatteryReader {
         if (!file.canRead()) null else file.readText().trim().takeIf { it.isNotEmpty() }
     }.getOrNull()
 
+    private enum class AhUnit { MICRO, AUTO }
+
     private companion object {
         const val CACHE_WINDOW_MS = 15_000L
+        const val MIN_SANE_MAH = 300f
+        const val MAX_SANE_MAH = 30_000f
+
+        val CHARGE_FULL_KEYS = listOf("POWER_SUPPLY_CHARGE_FULL", "CHARGE_FULL", "charge_full")
+        val DESIGN_KEYS = listOf(
+            "POWER_SUPPLY_CHARGE_FULL_DESIGN",
+            "CHARGE_FULL_DESIGN",
+            "charge_full_design",
+        )
+        val VENDOR_DESIGN_KEYS = listOf(
+            "POWER_SUPPLY_DESIGN_CAPACITY",
+            "DESIGN_CAPACITY",
+            "design_capacity",
+        )
+        val CYCLE_KEYS = listOf("POWER_SUPPLY_CYCLE_COUNT", "CYCLE_COUNT", "cycle_count")
     }
 }
