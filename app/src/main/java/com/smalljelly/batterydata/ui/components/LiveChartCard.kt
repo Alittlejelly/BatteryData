@@ -163,7 +163,7 @@ private fun MetricChart(
         Canvas(
             Modifier
                 .weight(1f)
-                .height(168.dp),
+                .height(126.dp),
         ) {
             val dash = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 5.dp.toPx()))
             for (i in 0..2) {
@@ -228,7 +228,7 @@ private fun MetricChart(
         Box(
             modifier = Modifier
                 .width(46.dp)
-                .height(168.dp),
+                .height(126.dp),
         ) {
             AxisLabel(
                 text = formatValue(metric, range.second),

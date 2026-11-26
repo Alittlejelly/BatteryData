@@ -326,7 +326,7 @@ fun RecordsScreen(
                     // 顶栏：库的 CollapsibleTopAppBar（大标题折叠）+ 渐进模糊带
                     NexioTopBar(
                         state = topBarState,
-                        title = "记录",
+                        title = "充电",
                         largeTitle = "充电记录",
                         backdrop = backdrop,
                         actions = { backdropAlpha, shadowAlpha ->
@@ -382,6 +382,9 @@ fun RecordsScreen(
                                             onOpenAbout()
                                         } else if (openCapacityAfterMenu) {
                                             openCapacityAfterMenu = false
+                                            // 记录页常驻组合，首次快照可能早于自动识别完成；
+                                            // 打开弹窗前重新取一次，避免“当前”显示旧值
+                                            designSample = repository.snapshot()
                                             showManualCapacityDialog = true
                                         }
                                     },
