@@ -16,6 +16,8 @@
     <!-- 应用内更新：下载完 APK 后拉起系统安装器。Android 8 起还需要用户在
          「安装未知应用」里给本应用授权，没授权时安装会被系统拦下。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 实时电量悬浮窗 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"
@@ -71,6 +73,16 @@
             android:name=".data.ChargeKeepAliveJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 实时电量悬浮窗 -->
+        <service
+            android:name=".data.BatteryOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="battery_overlay" />
+        </service>
 
         <!--
           给小米小部件（主题格式）读数据的只读接口。

@@ -8,6 +8,8 @@ import android.os.Build
 import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.Image
@@ -89,6 +91,7 @@ import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.haooz.nexioui.button.Button
@@ -218,6 +221,35 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
     val shizukuAuthorized = remember { mutableStateOf(ShizukuManager.checkSelfPermission()) }
     val islandSupported = remember { BatteryIslandHelper.isIslandSupported(context) }
     var islandEnabled by remember { mutableStateOf(settings.islandEnabled()) }
+    // 新增电池功能开关：自动充电记录、实时悬浮窗
+    var autoRecordEnabled by remember { mutableStateOf(settings.autoRecordEnabled()) }
+    var overlayEnabled by remember { mutableStateOf(settings.overlayEnabled()) }
+    // 启动悬浮窗并回查结果：部分 ROM 会给权限但拒绝窗口，失败就把开关复位，
+    // 避免出现"开关显示已开启、实际没有悬浮窗"的假状态
+    val startOverlayChecked: () -> Unit = {
+        com.smalljelly.batterydata.data.BatteryOverlayService.start(context)
+        scope.launch {
+            delay(1_200)
+            if (!com.smalljelly.batterydata.data.BatteryOverlayService.isRunning()) {
+                overlayEnabled = false
+                settings.setOverlayEnabled(false)
+                Toast.makeText(context, "悬浮窗未能启动，请检查系统权限后重试", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val granted = android.provider.Settings.canDrawOverlays(context)
+        overlayEnabled = granted
+        settings.setOverlayEnabled(granted)
+        if (granted) {
+            startOverlayChecked()
+        } else {
+            com.smalljelly.batterydata.data.BatteryOverlayService.stop(context)
+            Toast.makeText(context, "未授予悬浮窗权限", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // 后台保活：电池优化白名单状态（系统可读）。从设置页返回时刷新，
     // 避免用户刚授权回来卡片还显示"未忽略"
@@ -785,6 +817,76 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit = {}) {
                             }
                         },
                         enabled = islandSupported,
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                // 自动充电记录：插电自动开始、拔电自动保存
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        NexioText(
+                            text = "自动充电记录",
+                            fontSize = 16.sp,
+                            color = colors.onSurfaceContainer,
+                        )
+                        NexioText(
+                            text = "插电自动开始记录，拔电后保存",
+                            fontSize = 12.sp,
+                            color = colors.onSurfaceVariantSummary,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = autoRecordEnabled,
+                        onCheckedChange = {
+                            autoRecordEnabled = it
+                            settings.setAutoRecordEnabled(it)
+                            ChargeRecorder.onAutoRecordSettingChanged(context.applicationContext, it)
+                        },
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                // 实时电量悬浮窗：需要 SYSTEM_ALERT_WINDOW 权限
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        NexioText(
+                            text = "实时电量悬浮窗",
+                            fontSize = 16.sp,
+                            color = colors.onSurfaceContainer,
+                        )
+                        NexioText(
+                            text = "在其他应用上方显示电量 / 功率 / 温度",
+                            fontSize = 12.sp,
+                            color = colors.onSurfaceVariantSummary,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = overlayEnabled,
+                        onCheckedChange = { wanted ->
+                            if (wanted && !android.provider.Settings.canDrawOverlays(context)) {
+                                runCatching {
+                                    overlayPermissionLauncher.launch(
+                                        Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}"),
+                                        )
+                                    )
+                                }
+                            } else {
+                                overlayEnabled = wanted
+                                settings.setOverlayEnabled(wanted)
+                                if (wanted) startOverlayChecked()
+                                else com.smalljelly.batterydata.data.BatteryOverlayService.stop(context)
+                            }
+                        },
                     )
                 }
             }

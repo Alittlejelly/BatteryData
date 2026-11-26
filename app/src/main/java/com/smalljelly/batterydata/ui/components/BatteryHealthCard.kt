@@ -138,7 +138,13 @@ fun BatteryHealthCard(
         } else {
             Spacer(Modifier.height(6.dp))
             NexioText(
-                text = "当前机型未开放容量节点，健康度以系统状态为准",
+                text = when {
+                    sample.designCapacityMah == null && sample.estimatedFullChargeMah == null ->
+                        "未读到容量数据：系统节点未开放，机型库也未匹配到该机型，可在右上角手动设定"
+                    sample.designCapacityMah == null ->
+                        "缺少出厂容量，健康度以系统状态为准，可在右上角手动设定"
+                    else -> "缺少满电容量，健康度暂不可算"
+                },
                 fontSize = 12.sp,
                 color = colors.onSurfaceVariantSummary,
             )
@@ -147,7 +153,7 @@ fun BatteryHealthCard(
         Spacer(Modifier.height(12.dp))
         InnerDivider()
         InfoRow(
-            label = "设计容量",
+            label = "出厂容量",
             value = capacityText(sample.designCapacityMah) + designSourceSuffix(sample.designSource),
         )
         InnerDivider()
@@ -156,6 +162,13 @@ fun BatteryHealthCard(
         InfoRow("循环次数", sample.cycleCount?.let { "$it 次" } ?: "未公开")
         InnerDivider()
         InfoRow("系统健康状态", sample.healthText)
+        Spacer(Modifier.height(12.dp))
+        NexioText(
+            text = "电池健康为估算值，仅供参考，不代表电池的准确状态。结果可能受系统读数、机型适配、温度、充电方式和采样条件等因素影响，请勿仅凭该数值判断电池损耗或是否需要更换。",
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            color = colors.onSurfaceVariantSummary,
+        )
     }
 }
 
@@ -176,7 +189,7 @@ fun ManualCapacityDialog(
     OverlayDialog(
         show = show,
         title = "手动设定设计容量",
-        summary = "手动值优先于系统节点与机型库数据。\n当前：$currentDesign",
+        summary = "手动值优先于系统节点、系统配置与机型库数据。\n当前：$currentDesign",
         // 面板自己采样这一层做模糊，背后页面只压暗
         liquidGlassBackdrop = backdrop,
         onDismissRequest = onDismiss,
@@ -260,6 +273,9 @@ fun ManualCapacityDialog(
 fun designSourceSuffix(source: String?): String = when (source) {
     "手动" -> "（手动）"
     "系统节点" -> ""
+    "系统配置" -> "（系统）"
+    "机型库" -> "（机型库）"
+    "网络机型库" -> "（网络机型库）"
     null -> ""
     else -> "（参考）"
 }

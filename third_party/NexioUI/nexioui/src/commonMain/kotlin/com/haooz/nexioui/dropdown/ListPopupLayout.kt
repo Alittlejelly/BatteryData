@@ -87,9 +87,11 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
-// 进场：尺寸 spring 0.77/220，锚点迁移 spring 0.77/420
+// 进场：尺寸 spring，锚点迁移 spring。
+// 原来是 0.77/220 与 0.77/420：刚度高、回弹明显，点一下三点钮面板"窜"出来，看感很突兀。
+// 改成 0.92/140 与 0.92/240：起手更缓、几乎不过冲，展开像是从按钮里平滑长出来。
 private val FractionEnterAnimSpec =
-    spring<Float>(dampingRatio = 0.77f, stiffness = 220f, visibilityThreshold = 0.0001f)
+    spring<Float>(dampingRatio = 0.92f, stiffness = 140f, visibilityThreshold = 0.0001f)
 // 退场：尺寸 tween 240 缓出，锚点迁移同一条曲线。
 // 原来是 spring(0.85, 650)：约 130ms 就收完，30fps 下只有 4 帧，
 // 再叠加容器透明度按 3.6 倍提前归零，面板在还有半个屏幕大的时候就透明消失 ——
@@ -97,7 +99,7 @@ private val FractionEnterAnimSpec =
 private val FractionExitAnimSpec =
     tween<Float>(durationMillis = 240, easing = CubicBezierEasing(0.22f, 0f, 0.12f, 1f))
 private val OriginEnterAnimSpec =
-    spring<Float>(dampingRatio = 0.77f, stiffness = 420f, visibilityThreshold = 0.0001f)
+    spring<Float>(dampingRatio = 0.92f, stiffness = 240f, visibilityThreshold = 0.0001f)
 private val OriginExitAnimSpec =
     tween<Float>(240, easing = CubicBezierEasing(0.22f, 0f, 0.12f, 1f))
 /** 预测性返回取消后弹回展开态 */

@@ -67,7 +67,7 @@ class BatteryRepository(private val context: Context) {
         val cycleFromIntent = intent?.getIntExtra(BatteryManager.EXTRA_CYCLE_COUNT, -1)?.takeIf { it >= 0 }
         val raw = sysfs.read()
 
-        // 优先级：手动设置 > sysfs 节点 > 机型库
+        // 优先级：手动设置 > sysfs 节点 > 系统功耗配置 > 机型库
         val manualDesign = settings.manualDesignCapacityMah()
         val resolvedDesign: Pair<Float, String>? = when {
             manualDesign != null -> manualDesign to "手动"

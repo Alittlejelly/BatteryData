@@ -71,7 +71,7 @@ fun BatteryHeroCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(190.dp)
+            .height(168.dp)
             .clip(RoundedCornerShape(26.dp))
             .background(trackColor),
     ) {
@@ -104,7 +104,7 @@ fun BatteryHeroCard(
                 Row(verticalAlignment = Alignment.Bottom) {
                     NexioText(
                         text = level.toString(),
-                        fontSize = 72.sp,
+                        fontSize = 64.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = (-2.5).sp,
                         lineHeight = 74.sp,

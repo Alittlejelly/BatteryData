@@ -33,6 +33,10 @@ sealed interface RecorderState {
         val lastVoltageV: Float? = null,
         /** 到目前为止充进去的电能（Wh） */
         val energyWh: Float? = null,
+        /** 记录类型：charge / discharge / test */
+        val recordType: String = "charge",
+        /** 测试场景名 */
+        val scenarioName: String? = null,
     ) : RecorderState {
         val minutes: Int get() = ((lastAt - startAt) / 60_000L).toInt().coerceAtLeast(0)
     }
@@ -104,6 +108,10 @@ object ChargeRecorder {
         init(context)
         if (_state.value is RecorderState.Idle) restore()
         val ctx = appContext ?: return
+        // 自动充电记录：没在记、当前正充电时自动开一段（覆盖进程重启 / 开机场景）
+        if (_state.value is RecorderState.Idle && BatterySettings(ctx).autoRecordEnabled()) {
+            onAutoRecordSettingChanged(ctx, true)
+        }
         val islandKeepAlive = _state.value is RecorderState.Idle && run {
             val sample = BatteryRepository(ctx).snapshot()
             sample.isCharging && BatterySettings(ctx).islandEnabled()
@@ -136,7 +144,7 @@ object ChargeRecorder {
         if (_state.value !is RecorderState.Idle) return
         val sample = BatteryRepository(context.applicationContext).snapshot()
         if (sample.isCharging || sample.isFull) {
-            beginRecording(sample)
+            beginRecording(sample, recordType = "charge")
         } else {
             since = System.currentTimeMillis()
             waitedLevel = sample.level
@@ -144,6 +152,34 @@ object ChargeRecorder {
             persist()
         }
         startService(context.applicationContext)
+    }
+
+    /**
+     * 开始一次耗电测试（放电会话）：立即从当前电量开始，直到手动结束或充满电自动结算。
+     * @param scenario 场景名，如"游戏""视频""待机"
+     */
+    @Synchronized
+    fun startDischargeTest(context: Context, scenario: String) {
+        ensure(context)
+        if (_state.value !is RecorderState.Idle) return
+        val sample = BatteryRepository(context.applicationContext).snapshot()
+        beginRecording(sample, recordType = "test", scenarioName = scenario)
+        startService(context.applicationContext)
+    }
+
+    /**
+     * 自动充电记录开关变化时调用：开启后若正在充电则立刻开始一段记录。
+     */
+    @Synchronized
+    fun onAutoRecordSettingChanged(context: Context, enabled: Boolean) {
+        if (!enabled) return
+        ensure(context)
+        if (_state.value !is RecorderState.Idle) return
+        val sample = BatteryRepository(context.applicationContext).snapshot()
+        if (sample.isCharging && !sample.isFull) {
+            beginRecording(sample, recordType = "charge")
+            startService(context.applicationContext)
+        }
     }
 
     /** 放弃当前这次记录（等待中或记录中都直接丢掉） */
@@ -212,6 +248,13 @@ object ChargeRecorder {
                     clearPersist()
                     return
                 }
+                if (active.recordType != "charge") {
+                    // 放电/测试会话：只累计，不按充电状态自动结算；充满电或手动结束才收尾
+                    accumulate(active, sample, now)
+                    publish()
+                    if (sample.isCharging || sample.isFull) finish(sample, save = true)
+                    return
+                }
                 when {
                     sample.isCharging -> {
                         active.idleTicks = 0
@@ -242,13 +285,19 @@ object ChargeRecorder {
 
     // ---------------------------------------------------------------- 内部实现
 
-    private fun beginRecording(sample: BatterySample) {
+    private fun beginRecording(
+        sample: BatterySample,
+        recordType: String = "charge",
+        scenarioName: String? = null,
+    ) {
         val now = System.currentTimeMillis()
         val active = Session(
             startAt = now,
             fromLevel = sample.level,
             level = sample.level,
             lastAt = now,
+            recordType = recordType,
+            scenarioName = scenarioName,
         )
         active.counterStart = sample.chargeCounterMah
         active.counterEnd = sample.chargeCounterMah
@@ -267,6 +316,8 @@ object ChargeRecorder {
             level = sample.level,
             avgPowerW = null,
             lastAt = now,
+            recordType = recordType,
+            scenarioName = scenarioName,
         )
         persist()
     }
@@ -279,6 +330,10 @@ object ChargeRecorder {
         val power = sample.powerW?.let { abs(it) }?.takeIf { it > 0f }
         if (power != null) {
             active.power.push(power)
+            active.peakPower = maxOf(active.peakPower ?: 0f, power)
+            // 时间戳与温度必须与功率曲线等长，供分段报告按点索引对齐
+            active.timeOffsets.add((now - active.startAt).coerceAtLeast(0L))
+            active.temperatures.add(sample.temperatureC ?: Float.NaN)
             sample.currentMa?.let { active.current.push(abs(it)) }
             if (sample.voltageMv > 0) active.voltage.push(sample.voltageMv / 1000f)
 
@@ -310,6 +365,8 @@ object ChargeRecorder {
             lastCurrentMa = active.lastCurrentMa,
             lastVoltageV = active.lastVoltageV,
             energyWh = active.energyWh.takeIf { it > 0.01 }?.toFloat(),
+            recordType = active.recordType,
+            scenarioName = active.scenarioName,
         )
         persistTicks++
         if (persistTicks % 6 == 0) persist()
@@ -356,6 +413,11 @@ object ChargeRecorder {
             powerSeries = active.power.downsample(),
             currentSeries = active.current.downsample(),
             voltageSeries = active.voltage.downsample(),
+            seriesTimesMs = active.timeOffsets.downsampleLong(),
+            temperatureSeries = active.temperatures.downsample(),
+            peakPowerW = active.peakPower,
+            recordType = active.recordType,
+            scenarioName = active.scenarioName,
         )
         store?.add(record)
         _recordsVersion.value++
@@ -497,6 +559,11 @@ object ChargeRecorder {
                 json.put("power", active.power.toJsonArray())
                 json.put("current", active.current.toJsonArray())
                 json.put("voltage", active.voltage.toJsonArray())
+                json.put("times", JSONArray().apply { active.timeOffsets.forEach { put(it) } })
+                json.put("temps", active.temperatures.toJsonArray())
+                active.peakPower?.let { json.put("peak", it.toDouble()) }
+                if (active.recordType != "charge") json.put("type", active.recordType)
+                active.scenarioName?.let { json.put("scenario", it) }
             }
         }
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -532,7 +599,10 @@ object ChargeRecorder {
                     fromLevel = json.optInt("fromLevel"),
                     level = json.optInt("level"),
                     lastAt = lastAt,
+                    recordType = json.optString("type", "charge").ifEmpty { "charge" },
+                    scenarioName = json.optString("scenario").takeIf { it.isNotEmpty() },
                 )
+                if (json.has("peak")) active.peakPower = json.optDouble("peak").toFloat()
                 active.energyWh = json.optDouble("energy", 0.0)
                 active.powerSum = json.optDouble("powerSum", 0.0)
                 active.powerCount = json.optInt("powerCount", 0)
@@ -605,10 +675,13 @@ object ChargeRecorder {
         var fromLevel: Int,
         var level: Int,
         var lastAt: Long,
+        val recordType: String = "charge",
+        val scenarioName: String? = null,
     ) {
         var energyWh = 0.0
         var powerSum = 0.0
         var powerCount = 0
+        var peakPower: Float? = null
         var counterStart: Float? = null
         var counterEnd: Float? = null
         var designMah: Float? = null
@@ -624,11 +697,22 @@ object ChargeRecorder {
         val power = mutableListOf<Float>()
         val current = mutableListOf<Float>()
         val voltage = mutableListOf<Float>()
+        /** 与 power 等长：每个点的相对时间偏移 */
+        val timeOffsets = mutableListOf<Long>()
+        /** 与 power 等长：每个点的温度 */
+        val temperatures = mutableListOf<Float>()
     }
 }
 
 /** 曲线入库前抽稀：超过上限就隔点抽一半，保证细节还在、体积可控 */
 private fun List<Float>.downsample(): List<Float> {
+    if (size <= 120) return this
+    val step = size.toFloat() / 120
+    return List(120) { index -> this[(index * step).toInt().coerceAtMost(lastIndex)] }
+}
+
+/** 时间戳列与功率列用同样的抽稀比例，保证等长对齐 */
+private fun List<Long>.downsampleLong(): List<Long> {
     if (size <= 120) return this
     val step = size.toFloat() / 120
     return List(120) { index -> this[(index * step).toInt().coerceAtMost(lastIndex)] }
