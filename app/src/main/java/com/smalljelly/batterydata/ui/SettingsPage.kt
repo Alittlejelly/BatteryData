@@ -35,6 +35,8 @@ import com.smalljelly.batterydata.data.BatteryRepository
 import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.ui.components.AppPage
 import com.smalljelly.batterydata.ui.components.SlideInHost
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.ManualCapacityDialog
 import com.smalljelly.batterydata.ui.components.capacityText
 import com.smalljelly.batterydata.ui.components.designSourceSuffix
@@ -64,23 +66,41 @@ fun SettingsPage(
     // 进入动画的第一帧会先渲染上一次的旧页，闪一帧才切过来。
     if (subPage != null && displayPage != subPage) displayPage = subPage
 
+    // 唯一进度源：SlideInHost 渲染它，二级页的 PredictiveBackBox 手势也写它。
+    // 以前两边各有一份，松手瞬间目标不同 → 闪一下；返回后下层视差也没人归零 → 卡在一边。
+    val slideProgress = rememberSlideProgress(visible = subPage != null)
+
     // 二级页用 NexioSchedule 那套侧滑载入：新页整屏从右侧推入，
     // 设置首页被推开（视差）并压暗，转场中二级页裁屏幕圆角，像一张卡片
     SlideInHost(
         visible = subPage != null,
+        slideProgress = slideProgress,
         baseContent = {
             SettingsHome(onOpen = { subPage = it }, onOpenLogs = onOpenLogs)
         },
         overlayContent = {
             when (displayPage) {
-                SettingsSubPage.Notification -> NotificationSettingsScreen(onBack = { subPage = null })
-                SettingsSubPage.Background -> BackgroundSettingsScreen(onBack = { subPage = null })
-                SettingsSubPage.Appearance -> AppearanceSettingsScreen(onBack = { subPage = null })
-                SettingsSubPage.Capacity -> CapacitySettingsScreen(onBack = { subPage = null })
+                SettingsSubPage.Notification -> NotificationSettingsScreen(
+                    onBack = { subPage = null },
+                    slideProgress = slideProgress,
+                )
+                SettingsSubPage.Background -> BackgroundSettingsScreen(
+                    onBack = { subPage = null },
+                    slideProgress = slideProgress,
+                )
+                SettingsSubPage.Appearance -> AppearanceSettingsScreen(
+                    onBack = { subPage = null },
+                    slideProgress = slideProgress,
+                )
+                SettingsSubPage.Capacity -> CapacitySettingsScreen(
+                    onBack = { subPage = null },
+                    slideProgress = slideProgress,
+                )
                 // 日志诊断与检查更新都收进关于页了（关于是静态页，一屏放得下）
                 SettingsSubPage.About -> AboutScreen(
                     onBack = { subPage = null },
                     onOpenLogs = onOpenLogs,
+                    slideProgress = slideProgress,
                 )
                 null -> Unit
             }
@@ -179,7 +199,10 @@ private fun SettingsGroup(content: @Composable () -> Unit) {
  * 按实测折叠高度给，滚动时内容也能真正滚进顶栏糊带。
  */
 @Composable
-private fun CapacitySettingsScreen(onBack: () -> Unit) {
+private fun CapacitySettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val colors = NexioTheme.colorScheme
     val context = LocalContext.current
     val settings = remember { BatterySettings(context.applicationContext) }
@@ -197,6 +220,7 @@ private fun CapacitySettingsScreen(onBack: () -> Unit) {
         largeTitle = "电池容量",
         backdrop = backdrop,
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
         Card(

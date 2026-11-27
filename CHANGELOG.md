@@ -2,6 +2,44 @@
 
 ## 未发布
 
+### 放电记录（新增）
+
+- **记录「不插充电器」那段时间的耗电过程**，和充电记录语义正好对称：
+  充电记录从插上也即开始、拔电结束；放电记录从拔电开始、**插上充电器即结束并保存**。
+  两者开始/结束条件相反，所以底栏给了独立入口（实时 / 充电 / 放电 / 电池 / 设置）。
+- 记录期间超级岛显示「放电记录中 X.XW」，展开看已记录时长与消耗的电能；
+  功率取绝对值（放电电流是负的，直接累加会把 Wh 记成负数）。
+- 记录页与充电页共用同一套版式（一个 `RecordsScreen` + `RecordMode` 参数），
+  但**各看各的记录**：`records.filter { it.recordType == mode.type }`。
+  ⚠ 这里修了一个串台 bug：记录器是全局唯一状态，不做类型过滤时在放电页点开始、
+  充电页也会跟着显示「记录中」。
+- 卡片文案按类型切换：已充/已用 分钟、已输入/已消耗 Wh、拔电后/插电后自动保存。
+- 放电详情页复用充电详情版式，文案跟着换（放电详情 / 消耗电量 / 放电时长 / 放电曲线）。
+
+### 应用耗电排行（新增）
+
+- 放电详情页底部新增「应用耗电排行」：图标 + 名称 + 百分比 + 胶囊渐变进度条，
+  统计区间 = **这条记录的开始到结束**（翻旧记录看到的是当时那段过程，不是"现在往回推"）。
+- 数据来自 `UsageStatsManager`（公开 API）。⚠ 系统的真实 mAh（`dumpsys batterystats`）
+  需要 `BATTERY_STATS` 签名权限，第三方拿不到，所以这里用**前台时长占比**作为能耗的相对度量，
+  卡片右上角标注「前台时长」说明口径。
+- 需要「使用情况访问」权限。⚠ 这个权限必须在 manifest 里声明 `PACKAGE_USAGE_STATS`，
+  否则系统设置里本应用会显示成灰色、点不动（这是踩过的坑）。
+  卡片里给了授权路径提示和一键跳转。
+
+### 超级岛
+
+- 修「岛/锁屏卡片是空的、一个字都没有」。根因是**序号被白白消耗**：构建一次通知就会从
+  `nextSequence()` 拿走一个序号，而构建常常多于发送（前台服务 pinIsland 每次进前台重建一次、
+  `withShizukuBypass` 里 notify 之后又 foregroundPin 钉一遍）。被丢弃的序号把 SystemUI
+  手里的值顶到前面，真正发出去的那条更新被判 old 整条丢弃 —— 卡片停在建卡那一刻的空壳上。
+  现在序号只在真正 `notify()` 时生成一次，`pinIsland` 复用已发出去的那一身 notification，
+  `onStartCommand` 发现前台已是岛就不再重复钉住。
+  实测 30 秒内 `filterOut old` 由「每 5 秒必现」降到启动时 1 条。
+- 修无限互相递归导致启动即崩：`ChargeRecorder.ensure()` ↔ `onAutoRecordSettingChanged()`
+  互相调用，只要「自动充电记录」开着就是 `StackOverflowError`（8188KB 栈打满）。
+  两者改为共用不 re-enter 的 `autoStartIfCharging()`。
+
 ### 页面骨架统一
 
 - 新增 `AppPage` 统一页面骨架，一次性解决三件过去每页各写一套、行为还不一致的事：
@@ -98,6 +136,88 @@
   targetSDK=37 has been prohibited`），而「占一帧再退出」的两条路径传的就是 0。误启动
   （插电瞬间状态还没切到 CHARGING、job 补试的前几次）会把整个进程带走。现在统一走
   带具体 type 的 `enterForeground()`，失败只记日志并退出服务，不再崩进程。
+
+### 多设备电量（新增）
+
+- 底栏中间新增 **「设备」** 页（图标取 miuix `SearchDevice`）：把自己那几台蓝牙设备的
+  电量汇聚到一页。
+- **只统计系统里已配对的设备，不做 BLE 扫描**。原先的 BLE 扫描会把一屋子邻居的耳机、
+  手环全扫进来 —— 那不是"我的设备电量"，只是一份附近设备名单，还顺手要了
+  `BLUETOOTH_SCAN` + 定位这种吓人的权限。现在数据源只有 `getBondedDevices()`，
+  `BLUETOOTH_SCAN` / `ACCESS_FINE_LOCATION` 已从清单里删掉，运行时只要 `BLUETOOTH_CONNECT`。
+- 逐台 **串行** 连 GATT 读标准电量服务 `0x180F` / `0x2A19`（串行是刻意的：GATT 连接池
+  通常只有 4~7 个，同时连会集体失败）。每台三种结局分开显示：
+  **连上读到电量**（实时值）、**连上但无标准电量服务**（电量未知，算已连接）、
+  **连不上**（用缓存里的旧电量，标「已断开」）。
+- 断开的设备以**历史记录**留在列表里，每张卡片带删除按钮，可手动清掉；
+  已连接的不给删除按钮（点一下刷新就回来了，删了没意义）。
+- 界面：汇总卡（已连接 / 最低电量 / 已断开）+ 每张卡（名称、状态胶囊、MAC、电量条、
+  更新时间）；已连接的按电量升序（快没电的排最前），断开的按最近更新排在下面；
+  逐台读取时列表逐条亮起；离开页面自动断开连接。
+- 电量缓存落盘，下次打开先用缓存铺满列表，不白屏；连不上也没读到过的设备不落盘，
+  免得列表堆满「未知」。
+- 蓝牙声明为非必需硬件（没有蓝牙的平板也能装，页面会提示）。
+- 已知限制：使用私有协议、不实现标准电量服务的耳机/手环只能显示「—」。
+
+### 崩溃
+
+- 修复 **无限互相递归导致启动即崩**：`ChargeRecorder.ensure()` 里调用
+  `onAutoRecordSettingChanged()`，而后者又调回 `ensure()` —— 只要「自动充电记录」开着，
+  启动就是 `StackOverflowError`（现场 8188KB 栈打满）。两者改为共用不 re-enter 的
+  `autoStartIfCharging()`。
+- 修复 **插电时反复抛 `IllegalArgumentException`**：`ChargeKeepAliveJobService` 同时设了
+  `setExpedited(true)` 和 `setRequiresCharging(true)`，而这个组合系统明确拒绝
+  （`An expedited job can only have network and storage-not-low constraints`）。
+  异常被 `runCatching` 吞掉后回退普通 job，但每次排期都抛一次，频繁异常看起来就像"闪退"。
+  现在二选一：expedited 不挂充电约束（充电判断交给 job 自己的 `tryEnsure`），
+  普通 job 才挂 `setRequiresCharging(true)`。
+
+### 关于页
+
+- 静态页也支持纵向拖动**两端回弹**：套一层 `verticalScroll` 让它成为可滚动容器，
+  回弹交给 `overScrollVertical()`，并关掉 foundation 自带的 `overscrollEffect` 避免叠加。
+  内容用 `heightIn(min = 屏幕高 - 顶栏)` 撑满，底部说明仍然沉底。
+- **修「回弹时大标题不变大小」**：折叠量由顶栏的 `SharedScrollBehavior` 消费滚动增量得到，
+  但这一页内容不满一屏 —— `verticalScroll` 永远滚不动，一次拖动的位移全被回弹吃掉，
+  折叠逻辑从来没被喂过增量，大标题恒定停在展开态（所以看着"回弹有、标题没反应"）。
+  现在把回弹那段位移自己翻译成折叠量：**往上拖即收成小标题，停手 120ms 或被识别为
+  fling 后弹簧回展开**。连接器只观察不消费（返回 `Offset.Zero`），位移照旧往外传，
+  于是"标题变小的同时内容跟着弹"，和其他页面手感一致。
+- 顶栏改回**固定大标题**（「关于」），不再是居中行内标题。
+
+### 底栏
+
+- 五个页签时 `NexioUI` 默认的 `tabWidthFraction = 0.21` 会让胶囊宽度变成 **105% 屏宽**：
+  `startX = (屏宽 - 胶囊宽) / 2` 被 `coerceAtLeast(0)` 夹成 0，胶囊从屏幕左缘起笔、右侧
+  溢出到屏外，相邻图标中心距被拉到 80.9dp，看起来又散又偏心。
+  现在收到 `0.174`（胶囊 87% 屏宽、两侧各留 6.5% 居中），实测中心距 `222.4px → 184px`。
+  只改调用方参数，没有动 `third_party/NexioUI`。
+- 「放电」图标两个图标集里都没有，按「实时」「电池」的口径自绘（向下折线 + 箭头）。
+
+### 预见式返回
+
+- 新增 `PredictiveBackBox`，把手势采集与位移拆开：**唯一进度源**是 `SlideProgress`
+  （一个 `Animatable`），`SlideInHost` 只负责渲染，手势只负责写值。
+  之前两边各算一套位移，松手时目标不同 → 「退出闪一下」；下层视差 `-0.24×宽`
+  也没人归零 → 「底下的界面卡在屏幕一侧」。
+- 位移语义照搬 `AppNavHost`：`(1 - p) × 宽度`，拖多少露多少，**不再缩放**
+  （原来是 `p×0.3×宽 + scale(0.94)`，那是通知中心式的"掀起一角"，和侧滑不是一回事）。
+- 手势进度源换成 NexioUI 的 `rememberNavigationBack`：它和 handler 共用同一份底层 state
+  —— 拆成两个 `remember` 会编译通过但跟手动画永远不动。
+- 出场时长 320ms → 400ms：原值对手势已拖走大半后的剩余段刚好，整段从 1 播到 0 就显得太快。
+
+### 多设备电量（暂时下线）
+
+- 从底栏移除。**耳机电量在 MIUI 上第三方读不到**，三条路都堵死：
+  `connectGatt` 返回 `status=133`（系统蓝牙 `com.xiaomi.bluetooth` 独占 LE 连接）；
+  兜底的 `HeadsetProvider` / `WidgetProvider` 是 `signature|privileged` 权限；
+  `pm grant` 报 `not a changeable permission type`。
+- 代码保留在 `DevicesScreen` / `BluetoothBatteryScanner`，等找到可用数据源再接回。
+
+### 设置
+
+- 开关行**整行可点**：原来只有 40dp 的 Switch 挂回调，左侧标题摘要点了没反应。
+  现在整行 `clickable`（静默无波纹），禁用态一起失效。
 
 ## 1.0.4 (104) — 2026-11-25
 

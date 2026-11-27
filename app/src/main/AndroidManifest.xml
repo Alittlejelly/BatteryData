@@ -18,6 +18,36 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 实时电量悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!--
+      应用耗电排行：读系统的使用统计（UsageStatsManager）算各应用前台时长占比。
+
+      ⚠ 这条**必须声明**，否则系统设置里的「使用情况访问」列表会把这个应用显示成
+      灰色、点不动 —— 系统只给"声明过该权限"的应用开这个开关。
+      它不在运行时权限对话框里，用户得自己去设置里勾；tools:ignore 是因为
+      部分静态检查会把它误报成"需要运行时请求"。
+    -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+      多设备电量：只读**已配对**设备并连接 GATT 读标准电量服务（0x180F / 0x2A19）。
+
+      不扫描附近设备（`BLUETOOTH_SCAN` / 定位权限已移除）：那会把一屋子邻居的
+      耳机手环扫进来，不是"我的设备电量"。所以运行时只需要 BLUETOOTH_CONNECT，
+      读配对列表、连 GATT、读设备名都归它管。
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 蓝牙不是必需硬件：没有蓝牙的平板/电视盒也能装，只是这个页面提示不支持 -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
 
     <application
         android:allowBackup="true"

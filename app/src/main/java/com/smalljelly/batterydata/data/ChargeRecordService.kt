@@ -155,6 +155,15 @@ class ChargeRecordService : Service() {
             ACTION_STOP -> ChargeRecorder.stopAndSave(this)
             ACTION_CANCEL -> ChargeRecorder.cancel(this)
             else -> {
+                // 岛模式：前台通知已由 onCreate 的 pinIsland 钉住（同一身 notification、
+                // 同一个序号）。这里**不再 pinIsland 一次** —— 重复钉住等于把同一序号
+                // 往系统再推一遍，SystemUI 侧每次都记一条 `filterOut old …, x<x`。
+                // 数据刷新交给采样链的 5s 节拍，不需要额外推一遍。
+                if (pinnedId == BatteryIslandHelper.ISLAND_NOTIFICATION_ID ||
+                    pinnedId == BatteryIslandHelper.LIVE_NOTIFICATION_ID
+                ) {
+                    return START_STICKY
+                }
                 val s = BatteryRepository(applicationContext).snapshot()
                 lastSample = s
                 val state = ChargeRecorder.state.value
@@ -183,17 +192,29 @@ class ChargeRecordService : Service() {
     }
 
     /**
-     * 岛模式门控：正在充电 + 超级岛开关开 + 插电电量提醒开着。
-     * 充电时插电，保活零电量成本。
+     * 岛模式门控：超级岛开关开 + 插电电量提醒开着，且**正在充电或在放电记录中**。
+     *
+     * 放电记录期间设备本来就没充电，不能再按 `isCharging` 判 —— 否则服务一启动就
+     * 判定"不满足岛模式"直接退出，岛和记录一起没了。
+     * 充电时插电，保活零电量成本；放电记录期间用户明确要求记录，多耗一点也不冤。
      */
-    private fun islandAllowed(sample: BatterySample): Boolean =
-        sample.isCharging && settings.islandEnabled() && settings.chargeNoticeEnabled()
+    private fun islandAllowed(sample: BatterySample): Boolean {
+        if (!settings.islandEnabled() || !settings.chargeNoticeEnabled()) return false
+        if (sample.isCharging) return true
+        val state = ChargeRecorder.state.value as? RecorderState.Recording
+        return state?.recordType == "discharge"
+    }
 
     /**
      * 把岛（或谷歌兜底）通知钉成前台通知，并清掉可能残留的 1001 记录通知。
      *
      * 岛可用时它就是唯一的一条通知：记录中也一样，避免 Android 16 把 1001 提升成
      * 实时更新、和超级岛同时出现两条。
+     *
+     * **不重新构建岛通知**：`currentNotification` 会优先复用 helper 刚发出去的那一身
+     * notification 对象。以前这里每次钉住都重新构建一次，每次构建都要从
+     * `nextSequence()` 拿走一个序号 —— 被丢弃的序号把系统手里的值顶到前面，
+     * 真正发出去的那条更新被判定为 old 整条丢弃，卡片就停在无内容的空壳上。
      */
     private fun pinIsland(sample: BatterySample) {
         // resetThrottle 保证首个采样 tick 必走 bypass 发送一次，岛在掐 XMSF 网络的机型上也能渲染
@@ -320,7 +341,9 @@ class ChargeRecordService : Service() {
                     state.minutes > 0 -> "${state.minutes} 分钟"
                     else -> "刚刚开始"
                 }
-                "正在充电" to "已记录 $elapsed$avg"
+                // 放电记录的前台通知不能写「正在充电」—— 它此刻恰恰没插电
+                val headline = if (state.recordType == "discharge") "正在放电" else "正在充电"
+                headline to "已记录 $elapsed$avg"
             }
 
             RecorderState.Idle -> return null

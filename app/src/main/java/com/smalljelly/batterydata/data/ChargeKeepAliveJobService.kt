@@ -85,14 +85,31 @@ class ChargeKeepAliveJobService : JobService() {
             Log.i(TAG, "schedule(JOB_ID=$JOB_ID) result=$result")
         }
 
+        /**
+         * 构建充电约束 job。
+         *
+         * ⚠ **不能同时 setExpedited(true) 和 setRequiresCharging(true)**：
+         * 系统明确拒绝这种组合，抛
+         * `IllegalArgumentException: An expedited job can only have network and
+         * storage-not-low constraints`。之前这里无条件 setExpedited，于是每次插电
+         * 都抛一次异常再回退 —— 日志里那串 `W ChargeKeepAlive: IllegalArgumentException`
+         * 就是这么来的，频繁的异常抛出看起来就像"闪退"。
+         *
+         * 现在的策略：expedited 优先（快速拉起），但不挂充电约束 ——
+         * 充电判断交给 job 自己的 onStartJob 再做；排期失败再退回普通持久化 job。
+         */
         private fun newJobInfo(context: Context, expedited: Boolean): JobInfo {
             val builder = JobInfo.Builder(
                 JOB_ID,
                 ComponentName(context, ChargeKeepAliveJobService::class.java),
             )
-                .setRequiresCharging(true)
                 .setPersisted(true)
-            if (expedited) builder.setExpedited(true)
+            if (expedited) {
+                // expedited 只允许 network / storage-not-low 约束，不能加 requiresCharging
+                builder.setExpedited(true)
+            } else {
+                builder.setRequiresCharging(true)
+            }
             return builder.build()
         }
     }

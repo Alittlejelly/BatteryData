@@ -54,6 +54,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,8 +67,11 @@ import com.haooz.softglass.backdrop.backdrops.layerBackdrop
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
 import com.haooz.softglass.backdrop.drawBackdrop
 import com.haooz.softglass.backdrop.effects.blur
+import com.smalljelly.batterydata.data.AppPowerUsage
+import com.smalljelly.batterydata.data.AppPowerUsageReader
 import com.smalljelly.batterydata.data.ChargeRecord
 import com.smalljelly.batterydata.data.ChargeReportAnalyzer
+import com.smalljelly.batterydata.ui.components.AppPowerRankCard
 import com.smalljelly.batterydata.ui.components.ChargeReportCard
 import com.smalljelly.batterydata.data.UiDiagnostics
 import com.smalljelly.batterydata.ui.components.NexioTopBar
@@ -114,6 +119,9 @@ fun ChargeDetailScreen(
     onBack: () -> Unit,
 ) {
     val colors = NexioTheme.colorScheme
+    // 放电记录复用同一套版式，只换文案与指标名（曲线、健康度这些是一样的东西）
+    val isDischarge = record.recordType == "discharge"
+    val kind = if (isDischarge) "放电" else "充电"
     var metric by remember { mutableStateOf(DetailMetric.POWER) }
     val scroll = rememberScrollState()
     // 两路信号取最大：滚过 10dp（内容真的进栏下），或拖动时的回弹位移。
@@ -129,8 +137,8 @@ fun ChargeDetailScreen(
         topBar = {
             NexioTopBar(
                 state = topBarState,
-                title = "充电详情",
-                largeTitle = "充电详情",
+                title = "${kind}详情",
+                largeTitle = "${kind}详情",
                 backdrop = backdrop,
                 navigation = { backdropAlpha, shadowAlpha ->
                     NexioIconButton(
@@ -216,6 +224,12 @@ fun ChargeDetailScreen(
                     metric = metric,
                     onSelectMetric = { metric = it },
                 )
+                // 放电详情额外带上「这段时间的应用耗电排行」：
+                // 放电记录的意义就是"我用了这么久，到底是谁在耗电"，只有曲线还不够。
+                if (isDischarge) {
+                    Spacer(Modifier.height(12.dp))
+                    DischargeAppRankCard(record)
+                }
             }
             // 短页面的补充行程（正常为空）
             Spacer(Modifier.height(with(density) { extraRoomPx.toDp() }))
@@ -227,8 +241,51 @@ fun ChargeDetailScreen(
 /** 内容末尾留白：也给"已有行程"的算式用 */
 private val DetailTailSpace = 24.dp
 
+/**
+ * 放电详情的应用耗电排行：统计区间 = **这条记录的开始到结束**，不是"现在往前推"。
+ *
+ * 这样翻一条旧记录时，看到的就是当时那段放电过程里谁在耗电 —— 排行才有意义。
+ * 数据来自系统的使用统计（公开 API），需要「使用情况访问」权限。
+ */
+@Composable
+private fun DischargeAppRankCard(record: ChargeRecord) {
+    val context = LocalContext.current
+    val reader = remember { AppPowerUsageReader(context.applicationContext) }
+    var hasPermission by remember { mutableStateOf(reader.hasPermission()) }
+    var entries by remember { mutableStateOf<List<AppPowerUsage>>(emptyList()) }
+
+    val endAt = remember(record) {
+        record.durationMinutes?.let { record.dateMillis + it * 60_000L }
+            ?: record.dateMillis
+    }
+    LaunchedEffect(record.id) {
+        hasPermission = reader.hasPermission()
+        entries = if (hasPermission) {
+            reader.read(record.dateMillis, endAt)
+        } else {
+            emptyList()
+        }
+    }
+
+    AppPowerRankCard(
+        entries = entries,
+        hasPermission = hasPermission,
+        onRequestPermission = {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS,
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        },
+    )
+}
+
 @Composable
 private fun SummaryCard(record: ChargeRecord) {
+    val isDischarge = record.recordType == "discharge"
+    val kind = if (isDischarge) "放电" else "充电"
     val colors = NexioTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -258,7 +315,7 @@ private fun SummaryCard(record: ChargeRecord) {
         )
         Spacer(Modifier.height(4.dp))
         NexioText(
-            text = detailDateFormat.format(Date(record.dateMillis)) + " 开始充电",
+            text = detailDateFormat.format(Date(record.dateMillis)) + " 开始$kind",
             fontSize = 12.sp,
             color = colors.onSurfaceVariantSummary,
         )
@@ -270,12 +327,12 @@ private fun SummaryCard(record: ChargeRecord) {
                 modifier = Modifier.weight(1f),
             )
             MetricBlock(
-                label = "充入电量",
+                label = if (isDischarge) "消耗电量" else "充入电量",
                 value = record.energyWh?.let { String.format(Locale.US, "%.1f Wh", it) } ?: "—",
                 modifier = Modifier.weight(1f),
             )
             MetricBlock(
-                label = "充电时长",
+                label = if (isDischarge) "放电时长" else "充电时长",
                 value = record.durationMinutes?.let { formatDuration(it) } ?: "—",
                 modifier = Modifier.weight(1f),
             )
@@ -320,6 +377,7 @@ private fun CurveCard(
     onSelectMetric: (DetailMetric) -> Unit,
 ) {
     val colors = NexioTheme.colorScheme
+    val kind = if (record.recordType == "discharge") "放电" else "充电"
     val values = when (metric) {
         DetailMetric.POWER -> record.powerSeries
         DetailMetric.CURRENT -> record.currentSeries
@@ -337,7 +395,7 @@ private fun CurveCard(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             NexioText(
-                text = "充电曲线",
+                text = "${kind}曲线",
                 style = NexioTheme.textStyles.title3,
                 color = colors.onSurfaceContainer,
             )
@@ -356,8 +414,8 @@ private fun CurveCard(
             Spacer(Modifier.width(6.dp))
             NexioText(
                 text = when (metric) {
-                    DetailMetric.POWER -> "充电功率"
-                    DetailMetric.CURRENT -> "充电电流"
+                    DetailMetric.POWER -> "${kind}功率"
+                    DetailMetric.CURRENT -> "${kind}电流"
                     DetailMetric.VOLTAGE -> "电池电压"
                 },
                 fontSize = 12.sp,

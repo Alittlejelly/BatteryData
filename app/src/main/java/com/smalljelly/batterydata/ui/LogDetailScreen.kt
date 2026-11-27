@@ -21,6 +21,9 @@ import com.haooz.softglass.backdrop.backdrops.layerBackdrop
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
 import com.smalljelly.batterydata.data.LogFile
 import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
+import com.smalljelly.batterydata.ui.components.PredictiveBackBox
 import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -57,7 +60,12 @@ private const val BlurOverhangPx = 50f
  * 不是没画，是画了一层看不见的东西。
  */
 @Composable
-fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
+fun LogDetailScreen(
+    log: LogFile,
+    content: String,
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val listState = rememberLazyListState()
@@ -82,8 +90,10 @@ fun LogDetailScreen(log: LogFile, content: String, onBack: () -> Unit) {
         }
     }
 
-    Scaffold(
-        topBar = {
+    // 返回手势：由 PredictiveBackBox 接管（跟手位移由宿主的 AnimatedVisibility 负责渲染）
+    PredictiveBackBox(onBack = onBack, progress = slideProgress)
+        Scaffold(
+            topBar = {
             NexioTopBar(
                 state = topBarState,
                 title = "日志详情",

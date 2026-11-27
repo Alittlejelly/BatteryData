@@ -60,6 +60,8 @@ import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.island.BatteryIslandHelper
 import com.smalljelly.batterydata.shizuku.ShizukuManager
 import com.smalljelly.batterydata.ui.components.AppPage
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -75,7 +77,10 @@ import kotlinx.coroutines.withContext
  * 从设置一级页进来，长说明和授权引导留在这里，一级页保持干净。
  */
 @Composable
-fun NotificationSettingsScreen(onBack: () -> Unit) {
+fun NotificationSettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -118,6 +123,7 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
         title = "通知与显示",
         largeTitle = "通知与显示",
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
 
@@ -233,7 +239,10 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
  * 这些操作要跳系统页面，长文案也集中在这里，一级设置页只留一句摘要。
  */
 @Composable
-fun BackgroundSettingsScreen(onBack: () -> Unit) {
+fun BackgroundSettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -266,6 +275,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
         title = "后台与权限",
         largeTitle = "后台与权限",
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
 
@@ -427,7 +437,12 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-/** 二级页 / 一级页共用的开关行：标题 + 一句摘要 + 右侧开关。 */
+/**
+ * 二级页 / 一级页共用的开关行：标题 + 一句摘要 + 右侧开关。
+ *
+ * 整行可点：系统设置里这类开关行也是"点哪儿都能切"，只让 40dp 的开关本身可点太小了，
+ * 尤其是左侧文案占了绝大部分面积却点不动。开关自己也带点击，两处同向切换不会互相冲突。
+ */
 @Composable
 internal fun ToggleRow(
     title: String,
@@ -438,7 +453,14 @@ internal fun ToggleRow(
 ) {
     val colors = NexioTheme.colorScheme
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = { onCheckedChange(!checked) },
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

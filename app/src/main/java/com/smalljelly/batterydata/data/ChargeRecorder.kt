@@ -109,12 +109,13 @@ object ChargeRecorder {
         if (_state.value is RecorderState.Idle) restore()
         val ctx = appContext ?: return
         // 自动充电记录：没在记、当前正充电时自动开一段（覆盖进程重启 / 开机场景）
-        // 不要回调 onAutoRecordSettingChanged：它会调用 ensure，形成无限递归。
+        //
+        // ⚠ 这里**不能**调 onAutoRecordSettingChanged：它内部会再调一次 ensure，
+        // 而 ensure 又回头调它 —— 只要「自动充电记录」开着就是无限互相递归，
+        // 启动即 StackOverflowError（现场日志 8188KB 栈打满）。
+        // 两者共用 autoStartIfCharging（它不 re-enter ensure）即可。
         if (_state.value is RecorderState.Idle && BatterySettings(ctx).autoRecordEnabled()) {
-            val sample = BatteryRepository(ctx).snapshot()
-            if (sample.isCharging && !sample.isFull) {
-                beginRecording(sample, recordType = "charge")
-            }
+            autoStartIfCharging(ctx)
         }
         val islandKeepAlive = _state.value is RecorderState.Idle && run {
             val sample = BatteryRepository(ctx).snapshot()
@@ -142,7 +143,9 @@ object ChargeRecorder {
         }
     }
 
-    /** 开始记录：在充电就直接记，否则等插上充电器 */
+    /**
+     * 开始记录：在充电就直接记，否则等插上充电器
+     */
     @Synchronized
     fun arm(context: Context) {
         ensure(context)
@@ -156,6 +159,29 @@ object ChargeRecorder {
             _state.value = RecorderState.Waiting(since, sample.level)
             persist()
         }
+        startService(context.applicationContext)
+    }
+
+    /**
+     * 开始一次**放电记录**：记录"不插充电器"期间的耗电过程。
+     *
+     * 和充电记录对称：充电记录从插上开始、拔电结束；
+     * 放电记录从拔电开始、插上充电器结束（见 [onSample] 里的放电分支）。
+     * 正在充电时点这个按钮没有意义 —— 那属于充电记录，这里直接不开始。
+     *
+     * 功率按**绝对值**累计：放电时电流是负的，直接累加会把 Wh 记成负数。
+     */
+    @Synchronized
+    fun startDischarge(context: Context) {
+        ensure(context)
+        if (_state.value !is RecorderState.Idle) return
+        val sample = BatteryRepository(context.applicationContext).snapshot()
+        // 正在充电就不开放电记录：这段过程属于"充电"，两边语义别混
+        if (sample.isCharging) {
+            Log.i(TAG, "当前在充电，不开始放电记录")
+            return
+        }
+        beginRecording(sample, recordType = "discharge")
         startService(context.applicationContext)
     }
 
@@ -174,16 +200,25 @@ object ChargeRecorder {
 
     /**
      * 自动充电记录开关变化时调用：开启后若正在充电则立刻开始一段记录。
+     *
+     * 注意不要在这里调 [ensure]（见 [ensure] 里的注释：会互相递归）。
+     * 只做「准备好全局状态 + 必要时开一段」这一步。
      */
     @Synchronized
     fun onAutoRecordSettingChanged(context: Context, enabled: Boolean) {
         if (!enabled) return
-        ensure(context)
+        init(context)
+        val ctx = appContext ?: return
+        autoStartIfCharging(ctx)
+    }
+
+    /** 正在充电且还没在记录 → 开一段。**不**调用 [ensure]，供 [ensure] 自己复用。 */
+    private fun autoStartIfCharging(ctx: Context) {
         if (_state.value !is RecorderState.Idle) return
-        val sample = BatteryRepository(context.applicationContext).snapshot()
+        val sample = BatteryRepository(ctx).snapshot()
         if (sample.isCharging && !sample.isFull) {
             beginRecording(sample, recordType = "charge")
-            startService(context.applicationContext)
+            startService(ctx)
         }
     }
 
@@ -256,10 +291,33 @@ object ChargeRecorder {
                     return
                 }
                 if (active.recordType != "charge") {
-                    // 放电/测试会话：只累计，不按充电状态自动结算；充满电或手动结束才收尾
-                    accumulate(active, sample, now)
-                    publish()
-                    if (sample.isCharging || sample.isFull) finish(sample, save = true)
+                    // 放电会话：放电 = **不插充电器**的那段时间。
+                    // 所以判定和充电记录正好相反 ——
+                    // - 拔电（正在放电）→ 继续累计；
+                    // - 插上充电器 → **放电过程结束**，立刻结算保存（连续两次确认，防抖动）。
+                    // 测试会话（"test"）不同：那是定场景测试，插电不结束，由用户手动收尾。
+                    val isTest = active.recordType == "test"
+                    when {
+                        isTest -> {
+                            accumulate(active, sample, now)
+                            publish()
+                        }
+
+                        sample.isCharging -> {
+                            active.idleTicks++
+                            if (active.idleTicks >= 2) finish(sample, save = true)
+                            else {
+                                accumulate(active, sample, now)
+                                publish()
+                            }
+                        }
+
+                        else -> {
+                            active.idleTicks = 0
+                            accumulate(active, sample, now)
+                            publish()
+                        }
+                    }
                     return
                 }
                 when {

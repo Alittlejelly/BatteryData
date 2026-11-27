@@ -43,6 +43,9 @@ import com.smalljelly.batterydata.ui.theme.AppMaterial
 import com.smalljelly.batterydata.data.LogFile
 import com.smalljelly.batterydata.data.LogFileStore
 import com.smalljelly.batterydata.ui.components.NexioTopBar
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
+import com.smalljelly.batterydata.ui.components.PredictiveBackBox
 import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.pageTopBarHeight
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -81,7 +84,11 @@ private const val LiveSampleIntervalMs = 2_000L
  * 卡片用 Miuix Card，列出应用私有目录里的诊断日志；底部一颗蓝色主按钮开始 / 停止实时记录。
  */
 @Composable
-fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
+fun LogDiagnosticScreen(
+    onBack: () -> Unit,
+    onOpenLog: (LogFile) -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val store = remember { LogFileStore(context.applicationContext) }
@@ -131,6 +138,8 @@ fun LogDiagnosticScreen(onBack: () -> Unit, onOpenLog: (LogFile) -> Unit) {
     val backdrop = rememberLayerBackdrop()
     val density = LocalDensity.current
 
+    // 返回手势：由 PredictiveBackBox 接管（跟手位移由宿主的 AnimatedVisibility 负责渲染）
+    PredictiveBackBox(onBack = onBack, progress = slideProgress)
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
