@@ -19,6 +19,25 @@
     <!-- 实时电量悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!--
+      多设备电量：只读**已配对**设备并连接 GATT 读标准电量服务（0x180F / 0x2A19）。
+
+      不扫描附近设备（`BLUETOOTH_SCAN` / 定位权限已移除）：那会把一屋子邻居的
+      耳机手环扫进来，不是"我的设备电量"。所以运行时只需要 BLUETOOTH_CONNECT，
+      读配对列表、连 GATT、读设备名都归它管。
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 蓝牙不是必需硬件：没有蓝牙的平板/电视盒也能装，只是这个页面提示不支持 -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

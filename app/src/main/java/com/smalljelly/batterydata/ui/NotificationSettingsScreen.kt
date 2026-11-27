@@ -427,7 +427,12 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-/** 二级页 / 一级页共用的开关行：标题 + 一句摘要 + 右侧开关。 */
+/**
+ * 二级页 / 一级页共用的开关行：标题 + 一句摘要 + 右侧开关。
+ *
+ * 整行可点：系统设置里这类开关行也是"点哪儿都能切"，只让 40dp 的开关本身可点太小了，
+ * 尤其是左侧文案占了绝大部分面积却点不动。开关自己也带点击，两处同向切换不会互相冲突。
+ */
 @Composable
 internal fun ToggleRow(
     title: String,
@@ -438,7 +443,14 @@ internal fun ToggleRow(
 ) {
     val colors = NexioTheme.colorScheme
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = { onCheckedChange(!checked) },
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

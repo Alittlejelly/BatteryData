@@ -109,8 +109,13 @@ object ChargeRecorder {
         if (_state.value is RecorderState.Idle) restore()
         val ctx = appContext ?: return
         // 自动充电记录：没在记、当前正充电时自动开一段（覆盖进程重启 / 开机场景）
+        //
+        // ⚠ 这里**不能**调 onAutoRecordSettingChanged：它内部会再调一次 ensure，
+        // 而 ensure 又回头调它 —— 只要「自动充电记录」开着就是无限互相递归，
+        // 启动即 StackOverflowError（现场日志 8188KB 栈打满）。
+        // 两者共用 autoStartIfCharging（它不 re-enter ensure）即可。
         if (_state.value is RecorderState.Idle && BatterySettings(ctx).autoRecordEnabled()) {
-            onAutoRecordSettingChanged(ctx, true)
+            autoStartIfCharging(ctx)
         }
         val islandKeepAlive = _state.value is RecorderState.Idle && run {
             val sample = BatteryRepository(ctx).snapshot()
@@ -170,16 +175,25 @@ object ChargeRecorder {
 
     /**
      * 自动充电记录开关变化时调用：开启后若正在充电则立刻开始一段记录。
+     *
+     * 注意不要在这里调 [ensure]（见 [ensure] 里的注释：会互相递归）。
+     * 只做「准备好全局状态 + 必要时开一段」这一步。
      */
     @Synchronized
     fun onAutoRecordSettingChanged(context: Context, enabled: Boolean) {
         if (!enabled) return
-        ensure(context)
+        init(context)
+        val ctx = appContext ?: return
+        autoStartIfCharging(ctx)
+    }
+
+    /** 正在充电且还没在记录 → 开一段。**不**调用 [ensure]，供 [ensure] 自己复用。 */
+    private fun autoStartIfCharging(ctx: Context) {
         if (_state.value !is RecorderState.Idle) return
-        val sample = BatteryRepository(context.applicationContext).snapshot()
+        val sample = BatteryRepository(ctx).snapshot()
         if (sample.isCharging && !sample.isFull) {
             beginRecording(sample, recordType = "charge")
-            startService(context.applicationContext)
+            startService(ctx)
         }
     }
 

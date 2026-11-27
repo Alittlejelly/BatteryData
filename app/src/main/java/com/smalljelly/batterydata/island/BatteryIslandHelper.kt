@@ -61,6 +61,8 @@ object BatteryIslandHelper {
     private var lastIslandKey: String? = null
     private var lastIslandAt = 0L
     private var lastIslandLevel = -1
+    // 最近一次构建并发送出去的岛通知体：前台服务复用它钉住，不再重复构建（见 lastSentIsland）
+    private var lastBuilt: Notification? = null
 
     /**
      * 前台服务钉住回调：岛 / 兜底通知每次发出后，把 (id, notification) 交给
@@ -170,12 +172,26 @@ object BatteryIslandHelper {
         // 岛与谷歌兜底互斥：发岛时收掉兜底
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LIVE_NOTIFICATION_ID)
 
+        // ★ 唯一一次构建：序号、通知体、首次弹出标志都从这里出去。
+        //   以前这里构建一次、ChargeRecordService.pinIsland 又构建一次，两次都会
+        //   调用 nextSequence() 消耗一个序号 —— 真正发出去的那条序号比系统手里的小，
+        //   于是第一条岛通知被判 old 丢弃，卡片停在建卡那一刻（空白）。
         val notification = buildIslandNotification(context, sample, firstPop)
         // 首次弹大岛，之后静默更新缩略态（firstPop 在函数开头已算好）
         islandShowing = true
+        lastBuilt = notification
 
         scope.launch { withShizukuBypass(context, notification) }
     }
+
+    /**
+     * 最近一次构建并发送出去的岛通知（下次构建前一直有效）。
+     *
+     * 前台服务需要把「当前该钉住的通知」立刻交给 startForeground，但它**不能重新构建**：
+     * 重新构建 = 重新消耗一个序号 = 真正发送出去的那条被判 old。这里直接复用已经发出去
+     * 的那一身 notification 对象；还没发过（进程刚起、首个采样没到）时才按缩略态补构建一次。
+     */
+    fun lastSentIsland(sample: BatterySample): Notification? = lastBuilt
 
     /**
      * 构建岛通知（纯构建、不发送）：前台服务接管岛模式时用它立刻钉住前台通知，
@@ -225,17 +241,22 @@ object BatteryIslandHelper {
     }
 
     /**
-     * 同步构建「此刻该钉住的那条」通知（岛或谷歌兜底），供前台服务立即 startForeground。
-     * 会先建好对应渠道。不发送、不改节流状态。
+     * 同步取「此刻该钉住的那条」通知（岛或谷歌兜底），供前台服务立即 startForeground。
+     * 会先建好对应渠道。**不发送**。
      *
-     * 岛一律按缩略态（firstPop=false）构建：钉住只是占位满足前台服务 5 秒时限，真正的首次
-     * 大岛弹出交给随后 [resetThrottle] + [onSample] 的那次 bypass 发送（firstPop=!islandShowing）。
-     * 若这里也用 firstPop=true，钉住会先弹一次大岛、首个采样 tick 再弹一次，造成「双弹」。
+     * 岛模式下优先复用 [lastSentIsland] 已经发出去的那一身对象 —— 前台服务只是把它
+     * 钉住，绝不能重新构建。每次构建都会从 [nextSequence] 拿走一个序号，被丢掉的那个
+     * 序号会让系统手里的值跑到前面，真正发出去的那条更新就会被判 old 整条丢弃。
+     *
+     * 还没有发过任何岛（进程刚起、首个采样 tick 没到）时才按缩略态补构建一次 ——
+     * 这是唯一可以构建的时刻：此后 [resetThrottle] + 那次 bypass 发送会用 firstPop=true
+     * 再弹一次大岛，所以这里必须是 firstPop=false，否则会出现「双弹」。
      */
     fun currentNotification(context: Context, sample: BatterySample): Pair<Int, Notification> =
         if (isIslandSupported(context)) {
             ensureChannel(context)
-            ISLAND_NOTIFICATION_ID to buildIslandNotification(context, sample, firstPop = false)
+            ISLAND_NOTIFICATION_ID to (lastSentIsland(sample)
+                ?: buildIslandNotification(context, sample, firstPop = false))
         } else {
             ensureLiveChannel(context)
             LIVE_NOTIFICATION_ID to buildGoogleLiveNotification(context, sample)
@@ -256,6 +277,7 @@ object BatteryIslandHelper {
         manager.cancel(ISLAND_NOTIFICATION_ID)
         manager.cancel(LIVE_NOTIFICATION_ID)
         islandShowing = false
+        lastBuilt = null
         lastFallbackKey = null
         lastFallbackLevel = -1
         lastFallbackAt = 0L
@@ -327,7 +349,6 @@ object BatteryIslandHelper {
         if (!isShizukuAvailable()) {
             // 没授权也发：部分机型不掐 XMSF 网络仍能弹岛
             manager.notify(ISLAND_NOTIFICATION_ID, notification)
-            foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
             return
         }
         bypassMutex.withLock {
@@ -339,12 +360,13 @@ object BatteryIslandHelper {
             }
             if (!disabled) {
                 manager.notify(ISLAND_NOTIFICATION_ID, notification)
-                foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
                 return@withLock
             }
             try {
                 manager.notify(ISLAND_NOTIFICATION_ID, notification)
-                foregroundPin?.invoke(ISLAND_NOTIFICATION_ID, notification)
+                // 这条通知已经由前台服务 startForeground 钉住了（pinIsland 每次都紧跟在这里），
+                // 再调 foregroundPin 会把同一身 notification 再 startForeground 一次 ——
+                // 系统侧看到的是「同一序号又更新了一次」，正是 filterOut 的现场。
                 delay(100)
             } finally {
                 try {
@@ -372,12 +394,19 @@ object BatteryIslandHelper {
      *
      * 现在把「下一可用序号」落到 SharedPreferences，取 max(当前毫秒, 上次+1)：
      * 跨进程严格递增；用毫秒也让升级前的秒级旧值一定更小，不会升级后又卡一次。
+     *
+     * ⚠ **只在真正 notify 的那一刻调用一次**。每多调一次就白白消耗一个序号：
+     * 被消耗却没发出去的那个值，会让系统手里的序号跑到前面，
+     * 于是下一条真正发出的更新反而被判 old —— 2026-11-27 现场就是这样丢的
+     * （`filterOut old …, 1795750427740<1795750427761`，差 21ms 的正是在构建阶段被吃掉的那次）。
      */
     private fun nextSequence(context: Context): Long = synchronized(sequenceLock) {
         val prefs = context.applicationContext
             .getSharedPreferences(SEQ_PREFS, Context.MODE_PRIVATE)
         val last = prefs.getLong(SEQ_KEY, 0L)
-        val next = maxOf(System.currentTimeMillis(), last + 1)
+        // +10 而不是 +1：构建与发送之间隔了几毫秒，留出余量让序号明显跑在系统记住的值之上，
+        // 避免「同一毫秒里连续两次发送」被判成相等
+        val next = maxOf(System.currentTimeMillis(), last + 10L)
         prefs.edit().putLong(SEQ_KEY, next).apply()
         next
     }

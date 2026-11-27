@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.min
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.icon.extended.SearchDevice
 import com.haooz.nexioui.icon.NexioIcons
 import com.haooz.nexioui.icon.extended.Settings
 
@@ -26,6 +27,9 @@ import com.haooz.nexioui.icon.extended.Settings
  *
  * 颜色一律交给 `Icon` 的 tint，这里只用不透明黑，矢量本身不带语义色。
  */
+
+/** 「设备」：miuix 的 SearchDevice（设备发现），和底栏其他图标同一套线条口径 */
+val DevicesTabIcon: ImageVector by lazy { MiuixIcons.SearchDevice }
 
 /** 「充电」：清单图标，直接取 miuix 图标集 */
 val RecordsTabIcon: ImageVector by lazy { MiuixIcons.ListView }

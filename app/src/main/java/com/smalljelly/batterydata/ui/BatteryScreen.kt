@@ -99,6 +99,7 @@ import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.NexioTopContentSpacer
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
+import com.smalljelly.batterydata.ui.components.DevicesTabIcon
 import com.smalljelly.batterydata.ui.components.BatteryTabIcon
 import com.smalljelly.batterydata.ui.components.RecordsTabIcon
 import com.smalljelly.batterydata.ui.components.RealtimeTabIcon
@@ -182,9 +183,28 @@ private fun Screen.depth(): Int = when (this) {
 private val AppTabs = listOf(
     BottomBarItem(icon = RealtimeTabIcon, label = "实时", contentDescription = "实时"),
     BottomBarItem(icon = RecordsTabIcon, label = "充电", contentDescription = "充电"),
+    // 多设备电量放在中间：它是"看"的页面，夹在两个单机数据页之间最顺手
+    BottomBarItem(icon = DevicesTabIcon, label = "设备", contentDescription = "多设备电量"),
     BottomBarItem(icon = BatteryTabIcon, label = "电池", contentDescription = "电池"),
     BottomBarItem(icon = SettingsTabIcon, label = "设置", contentDescription = "设置"),
 )
+
+/** 底栏页数 */
+private const val TAB_COUNT = 5
+
+/**
+ * 页签宽度比例（占整屏宽的比例，NexioUI 会乘上页签数）。
+ *
+ * NexioUI 默认 0.21 是按 4 个页签设计的：4 × 0.21 = 84%，胶囊两侧各留 8% 的边距正好居中。
+ * 我们加到 5 个页签后 5 × 0.21 = 105%，胶囊比屏幕还宽，被撑满并向右溢出，
+ * 相邻图标中心距被拉到 80.9dp，看起来就很散。
+ *
+ * 先按「相邻图标中心距减少 15px」收紧到 0.196（实测 222.4px → 207.3px），
+ * 视觉上还是偏宽 —— 五个文字标签本来就不需要那么大的命中区。
+ * 现在收到 0.174：每页签中心距 ≈ 67dp，胶囊占 87% 屏宽、两侧各留 6.5% 边距，
+ * 和系统底栏的观感接近，且单页签 218px 宽远大于 48dp 的最小触控尺寸。
+ */
+private const val TAB_WIDTH_FRACTION = 0.174f
 
 @Composable
 fun BatteryScreen() {
@@ -220,7 +240,7 @@ fun BatteryScreen() {
 
     val scope = rememberCoroutineScope()
     // 四个主页面用 Pager 承载：跟手横滑、页面不重建，所以不会闪
-    val pagerState = rememberPagerState(initialPage = 0) { 4 }
+    val pagerState = rememberPagerState(initialPage = 0) { TAB_COUNT }
     // 哪一页的「更多」菜单展开着（-1 = 没展开）。
     // 不能用单个 Boolean：两个主页面在 Pager 里始终同时活着，共用一个 bool 会让
     // 两页的菜单同时挂载，出现两份重叠的面板。
@@ -394,7 +414,9 @@ fun BatteryScreen() {
                         )
                     }
 
-                    2 -> BatteryInfoScreen()
+                    2 -> DevicesScreen()
+
+                    3 -> BatteryInfoScreen()
 
                     else -> SettingsPage(
                         onOpenLogs = { showLogs = true },
@@ -503,6 +525,8 @@ private fun PageBottomBar(
             selectedIndex = selected,
             onSelect = onSelect,
             backdrop = backdrop,
+            // 收窄页签宽度，压掉 5 页签下过大的图标间距（见 TAB_WIDTH_FRACTION）
+            tabWidthFraction = TAB_WIDTH_FRACTION,
             modifier = Modifier.padding(bottom = 10.dp),
         )
     }
