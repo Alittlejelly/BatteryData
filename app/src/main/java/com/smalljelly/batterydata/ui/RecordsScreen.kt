@@ -108,9 +108,7 @@ import com.smalljelly.batterydata.data.ChargeRecord
 import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.data.RecorderState
 import com.smalljelly.batterydata.data.UiDiagnostics
-import com.smalljelly.batterydata.ui.components.ManualCapacityDialog
 import com.smalljelly.batterydata.ui.components.NexioTopBar
-import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.menuDropdownColors
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
 import com.smalljelly.batterydata.ui.components.capacityText
@@ -120,11 +118,6 @@ import com.smalljelly.batterydata.ui.components.rememberTopBarPull
 import com.haooz.nexioui.button.ButtonDefaults
 import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.reportPressTo
-import com.haooz.nexioui.dropdown.DropdownEntry
-import com.haooz.nexioui.dropdown.DropdownItem
-import com.haooz.nexioui.dropdown.DropdownMaskMode
-import com.haooz.nexioui.dropdown.DropdownPanelDragSelectState
-import com.haooz.nexioui.dropdown.OverlayDropdownPopup
 import com.haooz.nexioui.card.Card
 import com.haooz.nexioui.scaffold.Scaffold
 import com.haooz.nexioui.text.NexioText
@@ -132,7 +125,6 @@ import com.haooz.nexioui.button.FlatTextButton
 import com.haooz.nexioui.theme.NexioTheme
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
-import top.yukonga.miuix.kmp.icon.extended.More
 import com.smalljelly.batterydata.ui.components.materialGlassColor
 import com.smalljelly.batterydata.ui.theme.AppMaterial
 import com.haooz.nexioui.overscroll.overScrollVertical
@@ -155,12 +147,20 @@ private const val HEALTH_DELTA_EPSILON = 0.05f
  * 正在充电就立刻记，没在充电就等充电器插上；一直记到拔电，自动结算成一条。
  * 顶栏与首页同一套（大标题 + 渐进模糊带 + 右上角三点菜单），卡片可点进详情、长按删除。
  */
+/** 记录页的两种形态：充电记录 / 放电记录。布局一致，只换文案与数据来源。 */
+enum class RecordMode(val type: String, val tabTitle: String, val largeTitle: String) {
+    Charge(type = "charge", tabTitle = "充电", largeTitle = "充电记录"),
+    Discharge(type = "discharge", tabTitle = "放电", largeTitle = "放电记录"),
+}
+
 @Composable
 fun RecordsScreen(
     records: List<ChargeRecord>,
     recorder: RecorderState,
     /** 这一页是否真正显示在前台（Pager 两页始终组合，动画得等切过来再播） */
     isActive: Boolean,
+    /** 充电页 / 放电页 */
+    mode: RecordMode = RecordMode.Charge,
     onStartRecording: () -> Unit,
     onCancelRecording: () -> Unit,
     onFinishRecording: () -> Unit,
@@ -174,6 +174,9 @@ fun RecordsScreen(
     val settings = remember { BatterySettings(context.applicationContext) }
     val repository = remember { BatteryRepository(context.applicationContext) }
     var designSample by remember { mutableStateOf(repository.snapshot()) }
+
+    // 这一页只显示自己那种类型的记录：充电页不混放电，反之亦然
+    val ownRecords = remember(records, mode) { records.filter { it.recordType == mode.type } }
 
     // 列表状态：既喂顶栏的渐进模糊（首项越过 10dp 就淡入），也给回弹用
     val listState = rememberLazyListState()
@@ -220,8 +223,8 @@ fun RecordsScreen(
 
     // 新记录入场动画：上一帧的 id 集合，用来判断这一帧哪些是"新来的"
     var knownIds by remember { mutableStateOf<Set<Long>?>(null) }
-    val currentIds = remember(records) { records.mapTo(HashSet()) { it.id } }
-    val addedNow = remember(records) {
+    val currentIds = remember(ownRecords) { ownRecords.mapTo(HashSet()) { it.id } }
+    val addedNow = remember(ownRecords) {
         knownIds?.let { currentIds - it }.orEmpty()
     }
     // 一次性标记：只会判定为"新"一次。没有它的话，卡片滑出屏幕再回来、
@@ -259,7 +262,7 @@ fun RecordsScreen(
     val bottomHidden = confirmDelete || selectionMode
     LaunchedEffect(bottomHidden) { onModalVisibleChange(bottomHidden) }
 
-    val recording = recorder as? RecorderState.Recording
+    val recording = (recorder as? RecorderState.Recording)?.takeIf { it.recordType == mode.type }
     val waiting = recorder as? RecorderState.Waiting
     val busy = recording != null || waiting != null
 
@@ -276,12 +279,12 @@ fun RecordsScreen(
                     // 顶栏：库的 CollapsibleTopAppBar（大标题折叠）+ 渐进模糊带
                     NexioTopBar(
                         state = topBarState,
-                        title = "充电",
-                        largeTitle = "充电记录",
+                        title = mode.tabTitle,
+                        largeTitle = mode.largeTitle,
                         backdrop = backdrop,
                         actions = { backdropAlpha, shadowAlpha ->
                             // 空态自己有大按钮；正在记录 / 选择态时也不该再开一条
-                            if (!busy && !selectionMode && records.isNotEmpty()) {
+                            if (!busy && !selectionMode && ownRecords.isNotEmpty()) {
                                 NexioIconButton(
                                     onClick = { startRecording() },
                                     backdrop = backdrop,
@@ -395,6 +398,7 @@ fun RecordsScreen(
                                     ) {
                                         RecordingCard(
                                             state = recording,
+                                            mode = mode,
                                             onFinish = onFinishRecording,
                                             onCancel = requestCancelLive,
                                         )
@@ -419,7 +423,7 @@ fun RecordsScreen(
                             }
                         }
 
-                        itemsIndexed(records, key = { _, item -> item.id }) { index, record ->
+                        itemsIndexed(ownRecords, key = { _, item -> item.id }) { index, record ->
                             // 新记录：高度 0 → 满高 + 淡入，下面的卡片就是被"顶"下去的。
                             // 只有记录页真正在前台时才播，否则会在这个"看不见但已组合"的页面里
                             // 悄悄播完（Pager 两页始终同时存在），切过来就只剩结果
@@ -431,7 +435,7 @@ fun RecordsScreen(
                             ) {
                                 RecordCard(
                                     record = record,
-                                    healthDelta = healthDelta(records, index),
+                                    healthDelta = healthDelta(ownRecords, index),
                                     selectionMode = selectionMode,
                                     selected = record.id in selectedIds,
                                     onClick = { rect, layer ->
@@ -466,7 +470,7 @@ fun RecordsScreen(
                 // 只有左右能靠 horizontalAlignment 居中。这里单独铺一块「顶栏以下、底栏以上」
                 // 的可用区域，让按钮和说明文字在**屏幕垂直方向**也居中。
                 // 空态时列表里本来就没有条目，覆盖在上面不会有遮挡。
-                if (records.isEmpty() && !busy) {
+                if (ownRecords.isEmpty() && !busy) {
                     // 空态也要能真滚动、顶栏可收可放：用 verticalScroll（不是 scrollable）
                     // 复用列表那套「顶栏 → 回弹 → 下拉位移」链。scrollable 只接管手势、
                     // 滚动范围恒为 0，增量派发不完整 —— 表现为没有回弹、收起大标题后
@@ -494,7 +498,7 @@ fun RecordsScreen(
                                 .height(with(density) { emptyAreaPx.toDp() }),
                             contentAlignment = Alignment.Center,
                         ) {
-                            EmptyRecords(onStart = { startRecording() })
+                            EmptyRecords(mode = mode, onStart = { startRecording() })
                         }
                         Spacer(Modifier.height(baseBottom + with(density) { travelPx.toDp() }))
                     }
@@ -507,7 +511,7 @@ fun RecordsScreen(
                         show = true,
                         title = "删除记录",
                         summary = if (selectedIds.size == 1) {
-                            val timestamp = records.firstOrNull { it.id in selectedIds }?.dateMillis
+                            val timestamp = ownRecords.firstOrNull { it.id in selectedIds }?.dateMillis
                             "确定要删除" + (timestamp?.let { " ${dateFormat.format(Date(it))} " } ?: "") + "的这条记录吗？"
                         } else {
                             "确定要删除选中的 ${selectedIds.size} 条记录吗？"
@@ -719,6 +723,7 @@ private fun DialogActionButton(
 @Composable
 private fun RecordingCard(
     state: RecorderState.Recording,
+    mode: RecordMode,
     onFinish: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -741,7 +746,12 @@ private fun RecordingCard(
                 )
                 Spacer(Modifier.weight(1f))
                 NexioText(
-                    text = if (state.minutes > 0) "已充 ${state.minutes} 分钟" else "刚开始",
+                    text = if (state.minutes > 0) {
+                        val verb = if (mode == RecordMode.Discharge) "已用" else "已充"
+                        "$verb ${state.minutes} 分钟"
+                    } else {
+                        "刚开始"
+                    },
                     fontSize = 11.sp,
                     color = colors.onSurfaceVariantSummary,
                 )
@@ -771,8 +781,13 @@ private fun RecordingCard(
                 text = buildString {
                     append("平均 ")
                     append(state.avgPowerW?.let { "${formatOne(it)} W" } ?: "—")
-                    state.energyWh?.let { append("，已输入 ${formatOne(it)} Wh") }
-                    append("，拔电后自动保存")
+                    if (mode == RecordMode.Discharge) {
+                        state.energyWh?.let { append("，已消耗 ${formatOne(it)} Wh") }
+                        append("，插电后自动保存")
+                    } else {
+                        state.energyWh?.let { append("，已输入 ${formatOne(it)} Wh") }
+                        append("，拔电后自动保存")
+                    }
                 },
                 fontSize = 13.sp,
                 color = colors.onSurfaceVariantSummary,
@@ -844,7 +859,11 @@ private fun WaitingCard(state: RecorderState.Waiting, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyRecords(
+    mode: RecordMode,
+    onStart: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = NexioTheme.colorScheme
     Column(
         // 必须撑满：Column 默认宽度只有内容宽（300dp 的按钮），躺在列表左边缘，
@@ -868,7 +887,7 @@ private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
         ) {
             NexioText(
-                text = "开始记录",
+                text = if (mode == RecordMode.Charge) "开始记录" else "开始放电记录",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White,
@@ -876,7 +895,11 @@ private fun EmptyRecords(onStart: () -> Unit, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(12.dp))
         NexioText(
-            text = "点一下就开始，插上充电器自动记录\n拔电时自动保存这一次的完整过程",
+            text = if (mode == RecordMode.Charge) {
+                "点一下就开始，插上充电器自动记录\n拔电时自动保存这一次的完整过程"
+            } else {
+                "记录不插充电器时的耗电过程\n插上充电器即结束并保存"
+            },
             fontSize = 14.sp,
             lineHeight = 21.sp,
             color = colors.onSurfaceVariantSummary,

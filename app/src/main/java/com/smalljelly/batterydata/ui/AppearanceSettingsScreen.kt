@@ -54,6 +54,8 @@ import com.haooz.nexioui.theme.NexioTheme
 import com.haooz.softglass.backdrop.backdrops.rememberLayerBackdrop
 import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.ui.components.AppPage
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.menuDropdownColors
 import com.smalljelly.batterydata.ui.theme.AppMaterial
 import com.smalljelly.batterydata.ui.theme.MaterialOption
@@ -67,7 +69,10 @@ import com.smalljelly.batterydata.ui.theme.materialOptionOf
  * 关于页只留应用身份信息，功能型开关全部归到设置里。
  */
 @Composable
-fun AppearanceSettingsScreen(onBack: () -> Unit) {
+fun AppearanceSettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val colors = NexioTheme.colorScheme
     val context = LocalContext.current
     val settings = remember { BatterySettings(context.applicationContext) }
@@ -87,6 +92,7 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
         largeTitle = "外观与动画",
         backdrop = backdrop,
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
         Card(

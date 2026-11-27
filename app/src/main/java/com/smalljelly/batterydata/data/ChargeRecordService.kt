@@ -192,11 +192,18 @@ class ChargeRecordService : Service() {
     }
 
     /**
-     * 岛模式门控：正在充电 + 超级岛开关开 + 插电电量提醒开着。
-     * 充电时插电，保活零电量成本。
+     * 岛模式门控：超级岛开关开 + 插电电量提醒开着，且**正在充电或在放电记录中**。
+     *
+     * 放电记录期间设备本来就没充电，不能再按 `isCharging` 判 —— 否则服务一启动就
+     * 判定"不满足岛模式"直接退出，岛和记录一起没了。
+     * 充电时插电，保活零电量成本；放电记录期间用户明确要求记录，多耗一点也不冤。
      */
-    private fun islandAllowed(sample: BatterySample): Boolean =
-        sample.isCharging && settings.islandEnabled() && settings.chargeNoticeEnabled()
+    private fun islandAllowed(sample: BatterySample): Boolean {
+        if (!settings.islandEnabled() || !settings.chargeNoticeEnabled()) return false
+        if (sample.isCharging) return true
+        val state = ChargeRecorder.state.value as? RecorderState.Recording
+        return state?.recordType == "discharge"
+    }
 
     /**
      * 把岛（或谷歌兜底）通知钉成前台通知，并清掉可能残留的 1001 记录通知。
@@ -334,7 +341,9 @@ class ChargeRecordService : Service() {
                     state.minutes > 0 -> "${state.minutes} 分钟"
                     else -> "刚刚开始"
                 }
-                "正在充电" to "已记录 $elapsed$avg"
+                // 放电记录的前台通知不能写「正在充电」—— 它此刻恰恰没插电
+                val headline = if (state.recordType == "discharge") "正在放电" else "正在充电"
+                headline to "已记录 $elapsed$avg"
             }
 
             RecorderState.Idle -> return null

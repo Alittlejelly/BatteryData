@@ -18,6 +18,17 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 实时电量悬浮窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!--
+      应用耗电排行：读系统的使用统计（UsageStatsManager）算各应用前台时长占比。
+
+      ⚠ 这条**必须声明**，否则系统设置里的「使用情况访问」列表会把这个应用显示成
+      灰色、点不动 —— 系统只给"声明过该权限"的应用开这个开关。
+      它不在运行时权限对话框里，用户得自己去设置里勾；tools:ignore 是因为
+      部分静态检查会把它误报成"需要运行时请求"。
+    -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <!--
       多设备电量：只读**已配对**设备并连接 GATT 读标准电量服务（0x180F / 0x2A19）。

@@ -82,6 +82,7 @@ import com.smalljelly.batterydata.data.BatterySample
 import com.smalljelly.batterydata.data.ScreenTimeTracker
 import com.smalljelly.batterydata.data.ChargeReportAnalyzer
 import com.smalljelly.batterydata.ui.components.BatteryInsightsCard
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.HealthTrendCard
 import com.smalljelly.batterydata.data.UiDiagnostics
 import com.smalljelly.batterydata.data.formatEta
@@ -99,7 +100,7 @@ import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.TopBarActionSize
 import com.smalljelly.batterydata.ui.components.NexioTopContentSpacer
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
-import com.smalljelly.batterydata.ui.components.DevicesTabIcon
+import com.smalljelly.batterydata.ui.components.DischargeTabIcon
 import com.smalljelly.batterydata.ui.components.BatteryTabIcon
 import com.smalljelly.batterydata.ui.components.RecordsTabIcon
 import com.smalljelly.batterydata.ui.components.RealtimeTabIcon
@@ -109,6 +110,7 @@ import com.smalljelly.batterydata.ui.components.capacityText
 import com.smalljelly.batterydata.ui.components.designSourceSuffix
 import com.smalljelly.batterydata.ui.components.RealtimeStatsCard
 import com.haooz.nexioui.bottombar.BottomBar
+import com.haooz.nexioui.bottombar.BottomBarDefaults
 import com.haooz.nexioui.bottombar.BottomBarItem
 import com.haooz.nexioui.topappbar.CollapsibleTopAppBarDefaults
 import com.haooz.nexioui.card.Card
@@ -182,9 +184,13 @@ private fun Screen.depth(): Int = when (this) {
 
 private val AppTabs = listOf(
     BottomBarItem(icon = RealtimeTabIcon, label = "实时", contentDescription = "实时"),
-    BottomBarItem(icon = RecordsTabIcon, label = "充电", contentDescription = "充电"),
-    // 多设备电量放在中间：它是"看"的页面，夹在两个单机数据页之间最顺手
-    BottomBarItem(icon = DevicesTabIcon, label = "设备", contentDescription = "多设备电量"),
+    BottomBarItem(icon = RecordsTabIcon, label = "充电", contentDescription = "充电记录"),
+    // 放电记录独立成页：两种记录的开始/结束条件正好相反（插电↔拔电），
+    // 混在一页里既难讲清楚，也没法各自承载自己的数据（放电页有应用耗电排行）。
+    BottomBarItem(icon = DischargeTabIcon, label = "放电", contentDescription = "放电记录"),
+    // 多设备电量暂时下线：耳机电量在 MIUI 上第三方读不到（系统蓝牙独占 GATT，
+    // 兜底的 SecurityCenter provider 是 signature 级权限）。代码保留在
+    // DevicesScreen / BluetoothBatteryScanner，等找到可用数据源再接回底栏。
     BottomBarItem(icon = BatteryTabIcon, label = "电池", contentDescription = "电池"),
     BottomBarItem(icon = SettingsTabIcon, label = "设置", contentDescription = "设置"),
 )
@@ -195,14 +201,10 @@ private const val TAB_COUNT = 5
 /**
  * 页签宽度比例（占整屏宽的比例，NexioUI 会乘上页签数）。
  *
- * NexioUI 默认 0.21 是按 4 个页签设计的：4 × 0.21 = 84%，胶囊两侧各留 8% 的边距正好居中。
- * 我们加到 5 个页签后 5 × 0.21 = 105%，胶囊比屏幕还宽，被撑满并向右溢出，
- * 相邻图标中心距被拉到 80.9dp，看起来就很散。
- *
- * 先按「相邻图标中心距减少 15px」收紧到 0.196（实测 222.4px → 207.3px），
- * 视觉上还是偏宽 —— 五个文字标签本来就不需要那么大的命中区。
- * 现在收到 0.174：每页签中心距 ≈ 67dp，胶囊占 87% 屏宽、两侧各留 6.5% 边距，
- * 和系统底栏的观感接近，且单页签 218px 宽远大于 48dp 的最小触控尺寸。
+ * NexioUI 默认 0.21 是按 4 个页签设计的：4 × 0.21 = 84%，胶囊两侧各留 8% 边距正好居中。
+ * 5 个页签时 5 × 0.21 = 105% 会**比屏还宽**，胶囊被撑满并向右溢出、相邻图标间距也被拉大，
+ * 所以收到 0.174：每页签中心距 ≈ 67dp，胶囊占 87% 屏宽、两侧各留 6.5% 边距，
+ * 单页签 264px ≈ 96dp，远大于 48dp 的最小触控尺寸。
  */
 private const val TAB_WIDTH_FRACTION = 0.174f
 
@@ -395,6 +397,7 @@ fun BatteryScreen() {
                             recorder = recorderState,
                             // 只有记录页真的在当前可见位置时，新记录才播入场动画
                             isActive = pagerState.currentPage == 1 && !overlayOpen,
+                            mode = RecordMode.Charge,
                             onStartRecording = { ChargeRecorder.arm(context) },
                             onCancelRecording = { ChargeRecorder.cancel(context) },
                             onFinishRecording = { ChargeRecorder.stopAndSave(context) },
@@ -414,7 +417,32 @@ fun BatteryScreen() {
                         )
                     }
 
-                    2 -> DevicesScreen()
+                    // 放电记录独立一页：开始/结束条件与充电正相反（拔电开始、插电结束）
+                    2 -> {
+                        val records = remember(recordsVersion) { store.all() }
+                        RecordsScreen(
+                            records = records,
+                            recorder = recorderState,
+                            isActive = pagerState.currentPage == 2 && !overlayOpen,
+                            mode = RecordMode.Discharge,
+                            onStartRecording = { ChargeRecorder.startDischarge(context) },
+                            onCancelRecording = { ChargeRecorder.cancel(context) },
+                            onFinishRecording = { ChargeRecorder.stopAndSave(context) },
+                            onDelete = { id ->
+                                store.delete(id)
+                                ChargeRecorder.notifyRecordsChanged()
+                            },
+                            onOpenRecord = { record, rect, layer ->
+                                detailOrigin = rect
+                                detailSnapshot = layer
+                                detailId = record.id
+                                detailClosing = false
+                                detailVisible = true
+                            },
+                            onModalVisibleChange = { modalVisible = it },
+                            onTopBarPressChange = { topBarDragging = it },
+                        )
+                    }
 
                     3 -> BatteryInfoScreen()
 
@@ -434,6 +462,8 @@ fun BatteryScreen() {
             ) {
                 LogDiagnosticScreen(
                     onBack = { showLogs = false },
+                    // 进度只在页面挂载期间有意义：它随 AnimatedVisibility 一起进出
+                    slideProgress = rememberSlideProgress(true),
                     onOpenLog = { log ->
                         viewingLog = log to com.smalljelly.batterydata.data.LogFileStore(
                             context.applicationContext,

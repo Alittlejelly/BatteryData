@@ -136,15 +136,17 @@ object BatteryIslandHelper {
             cancel(context)
             return
         }
-        if (!sample.isCharging) {
+        val recording = ChargeRecorder.state.value as? RecorderState.Recording
+        // 放电记录期间也要有岛：此时设备**没在充电**，不能沿用"没充电就取消"的判断。
+        val discharging = recording != null && recording.recordType == "discharge"
+        if (!sample.isCharging && !discharging) {
             cancel(context)
             return
         }
         val supported = isIslandSupported(context)
-        val recording = ChargeRecorder.state.value is RecorderState.Recording
         if (supported && enabled) {
             sendOrUpdate(context, sample)
-        } else if (!recording) {
+        } else if (recording == null) {
             Log.d(TAG, "island unavailable (supported=$supported enabled=$enabled) → Google live fallback")
             sendGoogleLiveFallback(context, sample)
         }
@@ -417,19 +419,36 @@ object BatteryIslandHelper {
         sample: BatterySample,
         firstPop: Boolean,
     ): String {
-        val powerText = sample.powerW?.let { "${it.toInt()}W" } ?: "充电中"
-        val tempText = sample.temperatureC?.let { String.format(java.util.Locale.US, "%.1f°C", it) } ?: ""
-        // 记录中：岛显示这次记录的状态（时长 / 充入电能），而不是通用的"预计充满"。
-        // 记录与普通充电共用同一条岛通知，靠这里的内容切换体现"已接入记录"。
         val recording = ChargeRecorder.state.value as? RecorderState.Recording
-        val baseTitle = if (recording != null) "充电记录中" else "电池充电中"
+        val discharging = recording?.recordType == "discharge"
+        // 放电记录时设备没在充电，功率取绝对值（放电电流是负的），文案也要换
+        val powerW = sample.powerW?.let { if (discharging) kotlin.math.abs(it) else it }
+        val powerText = when {
+            powerW != null -> "${powerW.toInt()}W"
+            discharging -> "放电中"
+            else -> "充电中"
+        }
+        val tempText = sample.temperatureC?.let { String.format(java.util.Locale.US, "%.1f°C", it) } ?: ""
+        // 记录中：岛显示这次记录的状态（时长 / 电能），而不是通用的"预计充满"。
+        // 记录与普通充电共用同一条岛通知，靠这里的内容切换体现"已接入记录"。
+        val baseTitle = when {
+            recording == null -> "电池充电中"
+            discharging -> "放电记录中"
+            else -> "充电记录中"
+        }
         // etaMinutes 是自定义 getter，先取到局部变量才能 smart cast
         val eta = sample.etaMinutes
         val baseContent = when {
             recording != null -> buildString {
                 append("已记录 ${recording.minutes} 分钟")
                 recording.energyWh?.let {
-                    append(String.format(java.util.Locale.US, " · 充入 %.1fWh", it))
+                    append(
+                        String.format(
+                            java.util.Locale.US,
+                            if (discharging) " · 消耗 %.1fWh" else " · 充入 %.1fWh",
+                            it,
+                        ),
+                    )
                 }
             }
             eta != null -> "预计 ${eta / 60} 小时 ${eta % 60} 分后充满"
@@ -449,9 +468,17 @@ object BatteryIslandHelper {
             put("updatable", true)
             put("reopen", "reopen")
             put("sequence", nextSequence(context))
-            put("aodTitle", if (recording != null) "记录中 ${sample.level}%" else "充电中 ${sample.level}%")
+            put("aodTitle", when {
+                recording == null -> "充电中 ${sample.level}%"
+                discharging -> "放电中 ${sample.level}%"
+                else -> "记录中 ${sample.level}%"
+            })
             // OS2 状态栏焦点文案（官方推荐显式传）
-            put("ticker", if (recording != null) "充电记录中 ${sample.level}%" else "充电中 $powerText")
+            put("ticker", when {
+                recording == null -> "充电中 $powerText"
+                discharging -> "放电记录中 $powerText"
+                else -> "充电记录中 ${sample.level}%"
+            })
 
             put("baseInfo", JSONObject().apply {
                 put("type", 2)

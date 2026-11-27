@@ -60,6 +60,8 @@ import com.smalljelly.batterydata.data.ChargeRecorder
 import com.smalljelly.batterydata.island.BatteryIslandHelper
 import com.smalljelly.batterydata.shizuku.ShizukuManager
 import com.smalljelly.batterydata.ui.components.AppPage
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.rememberNexioTopBarState
@@ -75,7 +77,10 @@ import kotlinx.coroutines.withContext
  * 从设置一级页进来，长说明和授权引导留在这里，一级页保持干净。
  */
 @Composable
-fun NotificationSettingsScreen(onBack: () -> Unit) {
+fun NotificationSettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -118,6 +123,7 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
         title = "通知与显示",
         largeTitle = "通知与显示",
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
 
@@ -233,7 +239,10 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
  * 这些操作要跳系统页面，长文案也集中在这里，一级设置页只留一句摘要。
  */
 @Composable
-fun BackgroundSettingsScreen(onBack: () -> Unit) {
+fun BackgroundSettingsScreen(
+    onBack: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val context = LocalContext.current
     val colors = NexioTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -266,6 +275,7 @@ fun BackgroundSettingsScreen(onBack: () -> Unit) {
         title = "后台与权限",
         largeTitle = "后台与权限",
         onBack = onBack,
+        slideProgress = slideProgress,
         horizontalPadding = 24.dp,
     ) {
 

@@ -58,6 +58,9 @@ import com.smalljelly.batterydata.R
 import com.smalljelly.batterydata.data.BatterySettings
 import com.smalljelly.batterydata.data.UpdateChecker
 import com.smalljelly.batterydata.ui.components.CheckUpdateCard
+import com.smalljelly.batterydata.ui.components.PredictiveBackBox
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.NexioIconButton
 import com.smalljelly.batterydata.ui.components.NexioTopBar
 import com.smalljelly.batterydata.ui.components.UpdateResultDialog
@@ -79,7 +82,11 @@ import kotlinx.coroutines.launch
  * 玻璃采样层写在底色之前（顶栏玻璃 / 下拉面板都要采样本页内容）。
  */
 @Composable
-fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit) {
+fun AboutScreen(
+    onBack: () -> Unit,
+    onOpenLogs: () -> Unit,
+    slideProgress: SlideProgress = rememberSlideProgress(true),
+) {
     val colors = NexioTheme.colorScheme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -104,7 +111,9 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit) {
     var result by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var showResultDialog by remember { mutableStateOf(false) }
 
-    BackHandler { onBack() }
+    // 预见式返回：位移由宿主的 SlideInHost 渲染（slideProgress 是唯一进度），
+    // 这里只负责把返回手势交给它 —— 以前直接 BackHandler，没有跟手
+    PredictiveBackBox(onBack = onBack, progress = slideProgress)
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -133,27 +142,32 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit) {
             containerColor = colors.background,
             contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         ) { innerPadding ->
-            BoxWithConstraints(
+            // 外层 Box 负责底注定位，内层滚动容器只放卡片内容。
+            // ⚠ 底注**不能**放在 verticalScroll 里靠 weight 撑到底：滚动容器给子项的是
+            // 无限高度约束，weight 没有剩余空间可分配，底注会紧贴最后一张卡片（实测只差 14dp）。
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .layerBackdrop(backdrop)
-                    .background(colors.background)
-                    // 两端弹簧回弹（关掉 foundation 自带的 overscrollEffect，避免两套回弹互抢）
-                    .overScrollVertical()
-                    // 折叠连接夹在「回弹」和「滚动」之间：嵌套滚动由内向外派发，
-                    // 这个位置才拿得到列表消费完剩下的位移（见 collapseOnOverscroll）
-                    .collapseOnOverscroll(topBarState.scrollBehavior)
-                    .verticalScroll(rememberScrollState(), overscrollEffect = null),
+                    .background(colors.background),
             ) {
-                // 撑满一屏：内容比屏幕短时底部说明才会沉在最下面
-                Column(
+                BoxWithConstraints(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = maxHeight)
-                        .padding(top = innerPadding.calculateTopPadding())
-                        .padding(horizontal = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .fillMaxSize()
+                        // 两端弹簧回弹（关掉 foundation 自带的 overscrollEffect，避免两套回弹互抢）
+                        .overScrollVertical()
+                        // 折叠连接夹在「回弹」和「滚动」之间：嵌套滚动由内向外派发，
+                        // 这个位置才拿得到列表消费完剩下的位移（见 collapseOnOverscroll）
+                        .collapseOnOverscroll(topBarState.scrollBehavior)
+                        .verticalScroll(rememberScrollState(), overscrollEffect = null),
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = innerPadding.calculateTopPadding())
+                            .padding(horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         AppIcon(size = 88.dp)
                         Spacer(Modifier.height(14.dp))
                         NexioText(
@@ -221,20 +235,21 @@ fun AboutScreen(onBack: () -> Unit, onOpenLogs: () -> Unit) {
                                 onClick = onOpenLogs,
                             )
                         }
-
-                    // 底部说明贴底：用 weight 撑开中间那段空白，内容满屏时它才会跟随，
-                    // 而不是像之前那样用 align(BottomCenter) 浮在卡片上面叠字。
-                    // 间距和设置页保持一致：卡片到注释 18dp（设置页 SettingsConsultNote 前也是 18dp）
-                    Spacer(Modifier.weight(1f).heightIn(min = 18.dp))
-                    NexioText(
-                        text = "数据来自系统 BatteryManager 与 power_supply 节点",
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                        color = colors.onSurfaceVariantSummary,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(bottom = 28.dp),
-                    )
+                    }
                 }
+
+                // 底注固定在页面底部（不随内容滚动）：外层 Box 里定位，
+                // 这样它永远沉底，且和卡片之间自然隔开一整段空白。
+                NexioText(
+                    text = "数据来自系统 BatteryManager 与 power_supply 节点",
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = colors.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 24.dp, vertical = 28.dp),
+                )
             }
         }
 

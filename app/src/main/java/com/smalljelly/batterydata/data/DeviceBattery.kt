@@ -7,9 +7,10 @@ import org.json.JSONObject
 /**
  * 一台蓝牙设备的电量快照。
  *
- * [level] 为 null 表示没读到 —— 设备不支持蓝牙标准的 GATT 电量服务（各家耳机私有协议很常见）。
- * [connected] 只活在内存里：这一轮是否真的连上了。连上的那几台电量是实时读出来的，
- * 没连上的用缓存里的旧值，作为「历史」留在列表里，用户可手动删掉。
+ * [level] 为 null 表示还没读到 —— 设备不支持蓝牙标准的 GATT 电量服务（各家耳机私有协议很常见），
+ * 或者这一刻还没连上。没读到的值会保留上一次的结果，不会因为一次失败就清空。
+ *
+ * [connected] 只活在内存里：系统此刻是否报告它已连接。不落盘，每轮刷新重算。
  */
 data class DeviceBattery(
     /** MAC 地址，唯一标识 */
@@ -19,17 +20,18 @@ data class DeviceBattery(
     val level: Int? = null,
     /** 最近一次读到电量的时间戳（毫秒） */
     val updatedAt: Long = 0L,
-    /** 这一轮是否连上；不落盘，下次刷新重算 */
+    /** 系统此刻是否报告它已连接；不落盘 */
     val connected: Boolean = false,
 )
 
 /**
  * 设备电量的本地缓存。
  *
- * 只存「读到过电量」的结果，有两个用处：进页面先用缓存铺满列表（不用等一轮连接），
- * 以及设备断开之后仍能以历史形式留在列表中。
+ * 存的是**用户勾选要跟踪的设备列表**，不是"所有读到过的设备" ——
+ * 后者会让列表越用越长，且无法区分"我关心的"和"路过被扫到的"。
  *
- * 读不到电量的设备不落盘：这类记录没有任何信息量，只会让列表永久性地堆满「未知」。
+ * 读不到电量也照样落盘：用户勾选这个动作本身就表示"我要一直看到它"，
+ * 设备暂时没连上时应该显示为「已断开」而不是消失。
  */
 class DeviceBatteryStore(context: Context) {
 
@@ -59,23 +61,18 @@ class DeviceBatteryStore(context: Context) {
         runCatching {
             val array = JSONArray()
             devices.forEach { device ->
-                val level = device.level ?: return@forEach
                 array.put(
                     JSONObject().apply {
                         put("address", device.address)
                         put("name", device.name)
-                        put("level", level)
+                        // -1 = 还没读到过；不能用 0，那是"电量为 0%"这个真实状态
+                        put("level", device.level ?: -1)
                         put("at", device.updatedAt)
                     },
                 )
             }
             prefs.edit().putString(KEY_DEVICES, array.toString()).apply()
         }
-    }
-
-    /** 删掉一台设备的历史记录（界面上每张卡片的删除按钮） */
-    fun remove(devices: List<DeviceBattery>, address: String) {
-        save(devices.filterNot { it.address == address })
     }
 
     fun clear() {

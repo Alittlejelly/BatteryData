@@ -143,7 +143,9 @@ object ChargeRecorder {
         }
     }
 
-    /** 开始记录：在充电就直接记，否则等插上充电器 */
+    /**
+     * 开始记录：在充电就直接记，否则等插上充电器
+     */
     @Synchronized
     fun arm(context: Context) {
         ensure(context)
@@ -157,6 +159,29 @@ object ChargeRecorder {
             _state.value = RecorderState.Waiting(since, sample.level)
             persist()
         }
+        startService(context.applicationContext)
+    }
+
+    /**
+     * 开始一次**放电记录**：记录"不插充电器"期间的耗电过程。
+     *
+     * 和充电记录对称：充电记录从插上开始、拔电结束；
+     * 放电记录从拔电开始、插上充电器结束（见 [onSample] 里的放电分支）。
+     * 正在充电时点这个按钮没有意义 —— 那属于充电记录，这里直接不开始。
+     *
+     * 功率按**绝对值**累计：放电时电流是负的，直接累加会把 Wh 记成负数。
+     */
+    @Synchronized
+    fun startDischarge(context: Context) {
+        ensure(context)
+        if (_state.value !is RecorderState.Idle) return
+        val sample = BatteryRepository(context.applicationContext).snapshot()
+        // 正在充电就不开放电记录：这段过程属于"充电"，两边语义别混
+        if (sample.isCharging) {
+            Log.i(TAG, "当前在充电，不开始放电记录")
+            return
+        }
+        beginRecording(sample, recordType = "discharge")
         startService(context.applicationContext)
     }
 
@@ -266,10 +291,33 @@ object ChargeRecorder {
                     return
                 }
                 if (active.recordType != "charge") {
-                    // 放电/测试会话：只累计，不按充电状态自动结算；充满电或手动结束才收尾
-                    accumulate(active, sample, now)
-                    publish()
-                    if (sample.isCharging || sample.isFull) finish(sample, save = true)
+                    // 放电会话：放电 = **不插充电器**的那段时间。
+                    // 所以判定和充电记录正好相反 ——
+                    // - 拔电（正在放电）→ 继续累计；
+                    // - 插上充电器 → **放电过程结束**，立刻结算保存（连续两次确认，防抖动）。
+                    // 测试会话（"test"）不同：那是定场景测试，插电不结束，由用户手动收尾。
+                    val isTest = active.recordType == "test"
+                    when {
+                        isTest -> {
+                            accumulate(active, sample, now)
+                            publish()
+                        }
+
+                        sample.isCharging -> {
+                            active.idleTicks++
+                            if (active.idleTicks >= 2) finish(sample, save = true)
+                            else {
+                                accumulate(active, sample, now)
+                                publish()
+                            }
+                        }
+
+                        else -> {
+                            active.idleTicks = 0
+                            accumulate(active, sample, now)
+                            publish()
+                        }
+                    }
                     return
                 }
                 when {

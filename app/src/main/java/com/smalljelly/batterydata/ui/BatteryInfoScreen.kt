@@ -52,6 +52,8 @@ import com.smalljelly.batterydata.data.ScreenTimeStats
 import com.smalljelly.batterydata.data.ScreenTimeTracker
 import com.smalljelly.batterydata.data.healthRatingText
 import com.smalljelly.batterydata.ui.components.AppPage
+import com.smalljelly.batterydata.ui.components.SlideProgress
+import com.smalljelly.batterydata.ui.components.rememberSlideProgress
 import com.smalljelly.batterydata.ui.components.BatteryHealthCard
 import com.smalljelly.batterydata.ui.components.BatteryInsightsCard
 import com.smalljelly.batterydata.ui.components.HealthTrendCard
@@ -111,8 +113,11 @@ fun BatteryInfoScreen() {
         //
         // 采样层只能有一层：二级页不能嵌在 layerBackdrop 里面 ——
         // 否则采样树会包含采样者自己，HWUI 递归准备渲染树时直接爆栈（SIGSEGV）。
+        // 唯一进度源：SlideInHost 渲染它，二级页的 PredictiveBackBox 手势也写它
+        val slideProgress = rememberSlideProgress(visible = subPage != null)
         SlideInHost(
             visible = subPage != null,
+            slideProgress = slideProgress,
             baseContent = {
                 // Box 作用域：顶栏要用 align(TopCenter)
                 Box(Modifier.fillMaxSize()) {
@@ -181,6 +186,7 @@ fun BatteryInfoScreen() {
                         stats = screenStats,
                         healthPoints = healthPoints,
                         onBack = { subPage = null },
+                        slideProgress = slideProgress,
                     )
                 }
             },
@@ -317,12 +323,14 @@ private fun BatterySubPageScreen(
     stats: ScreenTimeStats,
     healthPoints: List<com.smalljelly.batterydata.data.HealthTrendPoint>,
     onBack: () -> Unit,
+    slideProgress: SlideProgress,
 ) {
     // 让位由 AppPage 按 Scaffold 实测的顶栏高度给，和记录页同一套算法。
     AppPage(
         title = page.title,
         largeTitle = page.title,
         onBack = onBack,
+        slideProgress = slideProgress,
     ) {
         when (page) {
             BatterySubPage.Trend -> HealthTrendCard(points = healthPoints)

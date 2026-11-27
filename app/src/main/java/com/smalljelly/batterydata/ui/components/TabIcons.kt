@@ -34,6 +34,46 @@ val DevicesTabIcon: ImageVector by lazy { MiuixIcons.SearchDevice }
 /** 「充电」：清单图标，直接取 miuix 图标集 */
 val RecordsTabIcon: ImageVector by lazy { MiuixIcons.ListView }
 
+/**
+ * 「放电」：向下走的折线 + 箭头，语义就是"电量在往下掉"。
+ *
+ * 两个图标集里都没有放电/耗电这类图形（miuix 只有一个 Download，那是下载语义），
+ * 所以和「实时」「电池」一样自绘，线条口径保持一致（1.7f 圆头圆角）。
+ */
+val DischargeTabIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "DischargeTab",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    )
+        .path(
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.7f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            // 折线：高位起步，一路往下
+            moveTo(3.2f, 6.4f)
+            lineTo(9.0f, 12.2f)
+            lineTo(13.0f, 8.4f)
+            lineTo(19.4f, 15.0f)
+        }
+        .path(
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.7f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        ) {
+            // 箭头：折线终点的右下角
+            moveTo(19.4f, 9.4f)
+            verticalLineTo(15.0f)
+            horizontalLineTo(13.8f)
+        }
+        .build()
+}
+
 /** 「设置」：齿轮，取 NexioUI 扩展图标 */
 val SettingsTabIcon: ImageVector by lazy { NexioIcons.Settings }
 

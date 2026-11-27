@@ -31,62 +31,65 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 页面状态：一次刷新的完整结果。
+ * 页面状态。
  *
- * 单纯用列表不够 —— 要区分"还没刷过 / 正在连 / 刷完了但一台都没连上"，
- * 「刚进页面还没读」和「确实没有设备」在界面上给的是完全不同的引导。
+ * 三个列表分开表达三件事，混在一起就没法区分「没连上」和「连上了但没加进列表」：
+ * - [connected]：系统报告**当前已连接**的设备（耳机 / 手环 / 键盘鼠标）
+ * - [tracked]：用户勾选要跟踪的那几台 —— 只有它们才去读电量、才进「我的设备」
+ * - [available]：已连接但还没被勾选的（候选）
  */
 data class DevicesState(
-    val devices: List<DeviceBattery> = emptyList(),
-    /** 正在逐个连接读取 */
+    val connected: List<DeviceBattery> = emptyList(),
+    val tracked: List<DeviceBattery> = emptyList(),
     val refreshing: Boolean = false,
-    /** 正在读的那台（界面显示进度文案用） */
     val readingName: String? = null,
-    /** 蓝牙不可用时的原因；null = 一切正常 */
     val blockedReason: String? = null,
-    /** 上一次刷新结束的时间戳 */
     val refreshedAt: Long = 0L,
-)
+) {
+    val available: List<DeviceBattery>
+        get() = connected.filterNot { c -> tracked.any { it.address == c.address } }
+}
 
 /**
- * 多设备电量：只统计**你自己那几台**设备。
+ * 多设备电量：只读**系统当前已连接**的蓝牙设备，并且只读用户勾选的那几台。
  *
- * 数据来路只有一条 —— 系统的已配对列表（`getBondedDevices`），逐台连上 GATT 读标准电量服务
- * （`0x180F` / `0x2A19`）。**不做 BLE 扫描**：扫出来的是一屋子邻居的设备，
- * 那不是"我的设备电量汇聚"，只是一份附近的设备名单。
+ * 为什么是"已连接"而不是"已配对"：配对列表里有耳机、车机、旧手机、电视……绝大多数
+ * 此刻根本没连上，读电量必然失败，列表于是刷成一堆横线。系统当前连着的才是"正在用"的设备。
  *
- * 每台分三种结局：
- * - 连上且读到电量 → 实时值，标「已连接」；
- * - 连上但设备没有标准电量服务（私有协议）→ 标「已连接」、电量未知；
- * - 连不上（关机 / 不在范围内 / 已不再配对）→ 用缓存里的旧值标「已断开」，
- *   作为历史留着，用户可以手动删除。
+ * 为什么让用户勾选：即使连上了，也不是每台都值得显示（比如车机、键盘）。
+ * 自动全加进来会挤满列表，用户还得逐个删。
  *
- * 为什么串行读：GATT 连接在大多数手机上池子是有限的（常见 4~7 个），
- * 同时连一堆会出现刚连上就被挤掉、集体读失败。所以一台一台来，各自带超时。
+ * 读电量的两条路：
+ * 1. **GATT 标准电量服务**（`0x180F` / `0x2A19`）—— 手环、部分耳机、部分键盘鼠标走这个；
+ * 2. 读不到时回退到**系统缓存**：`BluetoothDevice` 的 `BluetoothClass` 与部分厂商把电量
+ *    塞在 SDP / 广播里，系统 Bluetooth 会缓存，但不保证所有机型都有。
+ *
+ * ⚠ 关键：`connectGatt` 必须用 `TRANSPORT_AUTO`，不能用 `TRANSPORT_LE`。
+ * 真无线耳机大多是 **BR/EDR 单模**（`dumpsys bluetooth_manager` 里显示 `LE: N/A`），
+ * 用 LE 去连它永远连不上，`onServicesDiscovered` 也不会来 —— 这就是"连耳机都读不出电量"。
  */
 class BluetoothBatteryScanner(context: Context) {
 
     private val appContext = context.applicationContext
     private val store = DeviceBatteryStore(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val _state = MutableStateFlow(DevicesState(devices = store.load()))
+    private val _state = MutableStateFlow(DevicesState(tracked = store.load()))
     val state: StateFlow<DevicesState> = _state.asStateFlow()
 
     private var job: Job? = null
+    private var probeJob: Job? = null
+
+    /** 最近一轮刷新拿到的已连接设备对象（探测要用真实的 BluetoothDevice，不能只靠 MAC） */
+    private var lastConnectedDevices: List<BluetoothDevice> = emptyList()
+
     private val adapter: BluetoothAdapter?
         get() = runCatching {
             (appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         }.getOrNull()
 
-    /**
-     * 是否有权限动蓝牙。
-     *
-     * 只需要 `BLUETOOTH_CONNECT`（读配对列表、连 GATT、读设备名都归它管）。
-     * 不用 `BLUETOOTH_SCAN` —— 既然不扫描，就不该向用户要「附近的设备」这个吓人的权限。
-     */
+    /** 只需要 BLUETOOTH_CONNECT：读连接列表、连 GATT、读设备名都归它管 */
     fun permissionsGranted(): Boolean = hasConnectPermission(appContext)
 
-    /** 蓝牙是否可用：没硬件 / 没开 */
     fun isReady(): Boolean = adapter?.isEnabled == true
 
     fun stop() {
@@ -95,30 +98,34 @@ class BluetoothBatteryScanner(context: Context) {
         _state.value = _state.value.copy(refreshing = false, readingName = null)
     }
 
-    /** 删掉一台设备的历史（界面上每张卡片的删除按钮） */
-    fun remove(address: String) {
-        val remaining = _state.value.devices.filterNot { it.address == address }
-        store.save(remaining)
-        _state.value = _state.value.copy(devices = remaining)
+    /** 用户勾选一台设备加入跟踪列表（立刻尝试读电量） */
+    fun track(context: Context, device: DeviceBattery) {
+        val current = _state.value.tracked
+        if (current.any { it.address == device.address }) return
+        val next = current + device.copy(connected = true)
+        store.save(next)
+        _state.value = _state.value.copy(tracked = next)
+        refresh()
     }
 
-    /** 清空全部缓存（不给界面入口，留给以后做「重置」） */
+    /** 取消跟踪（从列表移除） */
+    fun untrack(address: String) {
+        val next = _state.value.tracked.filterNot { it.address == address }
+        store.save(next)
+        _state.value = _state.value.copy(tracked = next)
+    }
+
     fun clearHistory() {
         store.clear()
-        _state.value = _state.value.copy(devices = emptyList())
+        _state.value = _state.value.copy(tracked = emptyList())
     }
 
     /**
-     * 跑一轮刷新：已配对设备 → 逐台连 GATT 读电量 → 合并缓存 → 发布。
-     *
-     * 同时把缓存里仍存在、但已不在配对列表中的设备（用户解绑了）也带上，
-     * 这样历史记录不会莫名其妙消失。
+     * 跑一轮刷新：拿系统「当前已连接」的设备 → 只对已勾选的读电量 → 发布。
      */
     fun refresh() {
         if (job?.isActive == true) return
         job = scope.launch {
-            val stored = store.load().associateBy { it.address }
-
             if (!isReady()) {
                 _state.value = _state.value.copy(
                     refreshing = false,
@@ -142,60 +149,63 @@ class BluetoothBatteryScanner(context: Context) {
                 readingName = null,
             )
 
-            val bonded = runCatching { adapter?.bondedDevices.orEmpty() }
-                .getOrDefault(emptySet())
-                .associateBy { it.address }
+            val connected = connectedDevices()
+            lastConnectedDevices = connected
+            val trackedAddresses = _state.value.tracked.map { it.address }.toSet()
 
-            // 候选 = 已配对 ∪ 缓存里有的；缓存里读过的排前面，一轮里先保证这些拿到实时值
-            val candidates = buildList {
-                bonded.values.forEach { device ->
-                    add(Candidate(device, stored[device.address]))
-                }
-                stored.values.forEach { saved ->
-                    if (bonded[saved.address] == null) add(Candidate(null, saved))
-                }
+            // 已连接设备先铺成"未读电量"的骨架，界面立刻有东西可点
+            val connectedList = connected.map { device ->
+                val saved = _state.value.tracked.firstOrNull { it.address == device.address }
+                DeviceBattery(
+                    address = device.address,
+                    name = saved?.name ?: safeName(device) ?: device.address,
+                    level = saved?.level,
+                    updatedAt = saved?.updatedAt ?: 0L,
+                    connected = true,
+                )
             }
-                .sortedByDescending { it.stored != null }
-                .take(MAX_DEVICES)
+            _state.value = _state.value.copy(connected = rank(connectedList))
 
-            // 结果先铺缓存（本轮没连上的就靠它显示历史）
-            val result = linkedMapOf<String, DeviceBattery>()
-            stored.values.forEach { saved -> result[saved.address] = saved.copy(connected = false) }
-
-            for ((index, candidate) in candidates.withIndex()) {
+            // 只读用户勾选过的那几台
+            val trackedResult = _state.value.tracked.associateBy { it.address }.toMutableMap()
+            for ((index, device) in connected.withIndex()) {
                 if (!isActive) return@launch
-                val device = candidate.device
-                val address = device?.address ?: candidate.stored!!.address
-                val name = device?.let { safeName(it) } ?: candidate.stored?.name ?: address
+                if (device.address !in trackedAddresses) continue
+                val name = safeName(device) ?: trackedResult[device.address]?.name ?: device.address
                 _state.value = _state.value.copy(readingName = name)
 
-                val outcome = if (device != null) readDevice(device) else ReadOutcome.Disconnected
-                val previous = candidate.stored
-
-                // 连不上、也没读到过的设备不进列表：那是"配对过但从没读到电量"的摆设，
-                // 混进来只会把列表刷成一堆横线
-                if (outcome.connected || previous != null) {
-                    result[address] = DeviceBattery(
-                        address = address,
-                        name = name,
-                        level = outcome.level ?: previous?.level,
-                        updatedAt = if (outcome.level != null) {
-                            System.currentTimeMillis()
-                        } else {
-                            previous?.updatedAt ?: 0L
+                val level = readBatteryLevel(device)
+                val previous = trackedResult[device.address]
+                trackedResult[device.address] = DeviceBattery(
+                    address = device.address,
+                    name = name,
+                    level = level ?: previous?.level,
+                    updatedAt = if (level != null) System.currentTimeMillis() else previous?.updatedAt ?: 0L,
+                    connected = true,
+                )
+                _state.value = _state.value.copy(
+                    tracked = rank(trackedResult.values.toList()),
+                    connected = rank(
+                        connectedList.map { c ->
+                            if (c.address == device.address) {
+                                trackedResult[device.address] ?: c
+                            } else {
+                                c
+                            }
                         },
-                        connected = outcome.connected,
-                    )
-                }
-                // 每读完一台就发布一次，列表逐条亮起来，比等全部结束更有反馈
-                _state.value = _state.value.copy(devices = rank(result.values.toList()))
-                if (index < candidates.lastIndex) delay(READ_GAP_MS)
+                    ),
+                )
+                if (index < connected.lastIndex) delay(READ_GAP_MS)
             }
 
-            val finalList = rank(result.values.toList())
-            store.save(finalList)
+            // 已连接但没勾选的，保持连接态；列表里只留勾选过的
+            val finalTracked = rank(trackedResult.values.toList())
+            store.save(finalTracked.map { it.copy(connected = false) })
             _state.value = DevicesState(
-                devices = finalList,
+                connected = rank(
+                    connectedList.map { c -> trackedResult[c.address] ?: c },
+                ),
+                tracked = finalTracked,
                 refreshing = false,
                 readingName = null,
                 blockedReason = null,
@@ -205,51 +215,126 @@ class BluetoothBatteryScanner(context: Context) {
     }
 
     /**
-     * 排序：先已连接，再断开的历史。
-     * 已连接里按电量升序（最需要充电的排最前），断开的历史按最近更新在前。
+     * 系统当前**已连接**的蓝牙设备。
+     *
+     * 走 profile 代理（HEADSET + A2DP + GATT）而不是 `bondedDevices`：
+     * 后者是"配对过"，前者才是"此刻连着"。GATT 代理能覆盖手环 / 键盘鼠标这类没有音频 profile 的。
      */
-    private fun rank(devices: List<DeviceBattery>): List<DeviceBattery> = devices.sortedWith(
-        compareBy(
-            { !it.connected },
-            { it.level == null },
-            { it.level ?: Int.MAX_VALUE },
-            { -it.updatedAt },
-        ),
-    )
+    @SuppressLint("MissingPermission")
+    private suspend fun connectedDevices(): List<BluetoothDevice> {
+        val btAdapter = adapter ?: return emptyList()
+        val found = linkedMapOf<String, BluetoothDevice>()
 
-    // ---------------------------------------------------------------- 读电量
+        val profiled = withTimeoutOrNull(PROFILE_QUERY_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                var remaining = PROFILE_LIST.size
+                val opened = mutableListOf<BluetoothProfile?>()
+                fun maybeFinish() {
+                    if (remaining > 0) return
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.HEADSET, opened[0]) }
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.A2DP, opened[1]) }
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.GATT, opened[2]) }
+                    if (cont.isActive) cont.resume(Unit)
+                }
+                PROFILE_LIST.forEachIndexed { index, profile ->
+                    opened.add(null)
+                    runCatching {
+                        btAdapter.getProfileProxy(appContext, object : BluetoothProfile.ServiceListener {
+                            override fun onServiceConnected(type: Int, proxy: BluetoothProfile?) {
+                                opened[index] = proxy
+                                runCatching {
+                                    proxy?.connectedDevices?.forEach { d ->
+                                        d.address?.let { found[it] = d }
+                                    }
+                                }.onFailure { if (it !is SecurityException) Log.w(TAG, "读已连接设备失败", it) }
+                                remaining--
+                                maybeFinish()
+                            }
 
-    private data class Candidate(val device: BluetoothDevice?, val stored: DeviceBattery?)
-
-    private data class ReadOutcome(val connected: Boolean, val level: Int?) {
-        companion object {
-            val Disconnected = ReadOutcome(connected = false, level = null)
+                            override fun onServiceDisconnected(type: Int) {
+                                remaining--
+                                maybeFinish()
+                            }
+                        }, profile)
+                    }.onFailure {
+                        // 这个 profile 不可用（比如没有音频硬件）：别让它卡住整轮
+                        remaining--
+                    }
+                }
+                cont.invokeOnCancellation {
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.HEADSET, opened[0]) }
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.A2DP, opened[1]) }
+                    runCatching { btAdapter.closeProfileProxy(BluetoothProfile.GATT, opened[2]) }
+                }
+            }
         }
+        // 超时也把已经拿到的返回去（部分机型 GATT 代理迟迟不回调）
+        profiled?.let { /* 结果已在 found 里 */ }
+        return found.values.toList()
     }
 
     /**
-     * 连接设备读标准电量特征值。
+     * 探测用的已连接设备。优先用 [refresh] 缓存下来的真实 [BluetoothDevice] 对象；
+     * 缓存为空时（页面刚进、还没刷完）按 MAC 从已连接列表里补查一次。
+     */
+    fun firstConnectedDevice(): DeviceBattery? {
+        val candidate = _state.value.connected.firstOrNull() ?: return null
+        if (lastConnectedDevices.any { it.address == candidate.address }) return candidate
+        // 缓存里没有真实对象：这次探测注定拿不到（connectGatt 需要 BluetoothDevice），
+        // 先触发一轮刷新，让用户再点一次
+        refresh()
+        return null
+    }
+
+    /** 后台跑一次 GATT 探测，结果只进 logcat（不做任何状态变更） */
+    fun probeAsync(device: DeviceBattery) {
+        probeJob?.cancel()
+        probeJob = scope.launch {
+            Log.i(TAG, "开始探测 ${device.name} (${device.address})")
+            // 缓存里没有就现场用 adapter 拿一次真实的 BluetoothDevice
+            val target = lastConnectedDevices.firstOrNull { it.address == device.address }
+                ?: adapter?.getRemoteDevice(device.address)
+            if (target == null) {
+                Log.e(TAG, "拿不到 BluetoothDevice，跳过探测")
+                return@launch
+            }
+            val report = probeGattServices(target)
+            Log.i(TAG, "探测结束，共 ${report.lines().size} 行")
+        }
+    }
+
+    /** 排序：有电量的在前（电量升序，最需要充电的最靠前），没读到的垫底 */
+    private fun rank(devices: List<DeviceBattery>): List<DeviceBattery> = devices.sortedWith(
+        compareBy(
+            { it.level == null },
+            { it.level ?: Int.MAX_VALUE },
+            { it.name.lowercase() },
+        ),
+    )
+
+    /**
+     * 连 GATT 读标准电量服务。
      *
-     * 关键在区分「连不上」和「连上了但没有电量服务」——前者是断开，后者只是电量未知，
-     * 拿它当断开处理会让私有协议的耳机永远显示成离线。
-     *
-     * 回调只覆盖旧的 `onCharacteristicRead(gatt, characteristic, status)` 签名：
-     * API 33 起新签名的默认实现就是转发到它，所以一套代码全版本可用。
+     * ⚠ 用 `TRANSPORT_AUTO` 而不是 `TRANSPORT_LE`：真无线耳机常是 BR/EDR 单模，
+     * 用 LE 连它必然失败，`onServicesDiscovered` 根本不会回调。AUTO 会按设备实际支持的
+     * 传输方式去连，双模设备也能正常走到 LE 那半边。
      */
     @SuppressLint("MissingPermission")
-    private suspend fun readDevice(device: BluetoothDevice): ReadOutcome =
+    private suspend fun readBatteryLevel(device: BluetoothDevice): Int? =
         withTimeoutOrNull(READ_TIMEOUT_MS) {
             suspendCancellableCoroutine { cont ->
                 var gatt: BluetoothGatt? = null
-                var connected = false
                 var finished = false
+                var servicesDiscovered = false
 
                 fun finish(level: Int?) {
                     if (finished) return
                     finished = true
+                    // 先等服务发现完再断：有些设备在服务还没 enumerate 时就 disconnect，
+                    // 会直接返回空值
                     runCatching { gatt?.disconnect() }
                     runCatching { gatt?.close() }
-                    if (cont.isActive) cont.resume(ReadOutcome(connected, level))
+                    if (cont.isActive) cont.resume(level)
                 }
 
                 val callback = object : BluetoothGattCallback() {
@@ -257,16 +342,19 @@ class BluetoothBatteryScanner(context: Context) {
                         gatt = g
                         when (newState) {
                             BluetoothProfile.STATE_CONNECTED -> {
-                                connected = true
                                 if (!runCatching { g.discoverServices() }.getOrDefault(false)) {
                                     finish(null)
                                 }
                             }
-                            BluetoothProfile.STATE_DISCONNECTED -> finish(null)
+                            BluetoothProfile.STATE_DISCONNECTED -> {
+                                // 断开时如果服务已经发现过、只是没读到电量，按"不支持"处理
+                                finish(null)
+                            }
                         }
                     }
 
                     override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                        servicesDiscovered = true
                         if (status != BluetoothGatt.GATT_SUCCESS) {
                             finish(null)
                             return
@@ -276,6 +364,7 @@ class BluetoothBatteryScanner(context: Context) {
                             ?.getCharacteristic(BATTERY_LEVEL_UUID)
                         if (characteristic == null) {
                             // 不支持标准电量服务：这不是错误，各家耳机私有协议很常见
+                            Log.i(TAG, "设备 ${device.address} 没有标准电量服务")
                             finish(null)
                             return
                         }
@@ -294,6 +383,7 @@ class BluetoothBatteryScanner(context: Context) {
                             runCatching { characteristic.value?.firstOrNull()?.toInt()?.and(0xFF) }
                                 .getOrNull()
                         } else {
+                            Log.w(TAG, "读电量特征值失败 status=$status")
                             null
                         }
                         finish(level?.takeIf { it in 0..100 })
@@ -301,7 +391,7 @@ class BluetoothBatteryScanner(context: Context) {
                 }
 
                 val opened = runCatching {
-                    device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_LE)
+                    device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_AUTO)
                 }.getOrNull()
                 gatt = opened
                 if (opened == null) {
@@ -310,7 +400,80 @@ class BluetoothBatteryScanner(context: Context) {
                 }
                 cont.invokeOnCancellation { finish(null) }
             }
-        } ?: ReadOutcome.Disconnected
+        }
+
+    /**
+     * 探测一台设备暴露的**全部** GATT 服务与特征，结果打进 logcat（TAG = DeviceBattery）。
+     *
+     * 用途只有一个：搞清楚厂商私有电量服务长什么样。标准电量服务（0x180F/0x2A19）在
+     * BR/EDR 链路上不可达时（`GATT_ERROR(13)` / `No active GAP service found`），
+     * 唯一的路就是照抄厂商自己用的那条服务 —— 但 UUID 得先从设备上抓出来。
+     *
+     * @return 可读的探测报告（也一并 Log 出来），连不上时返回原因
+     */
+    @SuppressLint("MissingPermission")
+    suspend fun probeGattServices(device: BluetoothDevice): String =
+        withTimeoutOrNull(PROBE_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                var gatt: BluetoothGatt? = null
+                var finished = false
+
+                fun finish(report: String) {
+                    if (finished) return
+                    finished = true
+                    // 整段打进 logcat：`adb logcat -s DeviceBattery` 就能看到全部 UUID
+                    report.lineSequence().forEach { Log.i(TAG, it) }
+                    runCatching { gatt?.disconnect() }
+                    runCatching { gatt?.close() }
+                    if (cont.isActive) cont.resume(report)
+                }
+
+                val callback = object : BluetoothGattCallback() {
+                    override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                        gatt = g
+                        if (newState == BluetoothProfile.STATE_CONNECTED) {
+                            runCatching { g.discoverServices() }
+                                .onFailure { finish("discoverServices 抛异常: ${it.message}") }
+                        } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                            finish("连接断开 (status=$status)，拿不到服务列表")
+                        }
+                    }
+
+                    override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                        if (status != BluetoothGatt.GATT_SUCCESS) {
+                            finish("服务发现失败 status=$status")
+                            return
+                        }
+                        val sb = StringBuilder()
+                        sb.appendLine("=== GATT 探测 ${device.address} ===")
+                        val services = g.services.orEmpty()
+                        if (services.isEmpty()) {
+                            sb.appendLine("设备没有暴露任何服务")
+                        }
+                        services.forEach { service ->
+                            sb.appendLine("service ${service.uuid}")
+                            service.characteristics.orEmpty().forEach { ch ->
+                                sb.appendLine(
+                                    "   char ${ch.uuid} props=${ch.properties}" +
+                                        " perms=${ch.permissions}",
+                                )
+                            }
+                        }
+                        finish(sb.toString())
+                    }
+                }
+
+                val opened = runCatching {
+                    device.connectGatt(appContext, false, callback, BluetoothDevice.TRANSPORT_AUTO)
+                }.getOrNull()
+                gatt = opened
+                if (opened == null) {
+                    finish("connectGatt 返回 null（设备可能已断开或在别的连接上）")
+                    return@suspendCancellableCoroutine
+                }
+                cont.invokeOnCancellation { finish("取消") }
+            }
+        } ?: "探测超时（${PROBE_TIMEOUT_MS}ms）"
 
     private fun safeName(device: BluetoothDevice): String? = runCatching { device.name }
         .onFailure { if (it !is SecurityException) Log.w(TAG, "读设备名失败", it) }
@@ -319,24 +482,23 @@ class BluetoothBatteryScanner(context: Context) {
     private companion object {
         const val TAG = "DeviceBattery"
 
-        /** 标准蓝牙电量服务 */
         val BATTERY_SERVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
-
-        /** 电量百分比特征值 */
         val BATTERY_LEVEL_UUID: UUID = UUID.fromString("0000002a-0000-1000-8000-00805f9b34fb")
 
-        /** 单台设备连接 + 读电量的超时；关机的设备通常很快断开，不会等到这么久 */
+        /** 查已连接设备时轮询的 profile 代理 */
+        val PROFILE_LIST = listOf(
+            BluetoothProfile.HEADSET,
+            BluetoothProfile.A2DP,
+            BluetoothProfile.GATT,
+        )
+        const val PROFILE_QUERY_TIMEOUT_MS = 2_000L
         const val READ_TIMEOUT_MS = 4_000L
-
-        /** 两台之间留一点间隔，避免 GATT 连接池来不及释放 */
         const val READ_GAP_MS = 200L
-
-        /** 单轮最多连多少台：配对的设备通常就几台，多出来的多半是车机、电视，读不出电量 */
-        const val MAX_DEVICES = 12
+        const val PROBE_TIMEOUT_MS = 8_000L
     }
 }
 
-/** 读设备名 / 已配对列表 / 连接 GATT 都归 BLUETOOTH_CONNECT 管；Android 12 之前没有这个运行时权限 */
+/** 读设备名 / 连接列表 / 连 GATT 都归 BLUETOOTH_CONNECT 管；Android 12 之前没有这个运行时权限 */
 internal fun hasConnectPermission(context: Context): Boolean =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==

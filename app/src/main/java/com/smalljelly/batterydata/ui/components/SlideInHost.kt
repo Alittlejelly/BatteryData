@@ -52,26 +52,26 @@ import kotlin.math.roundToInt
 fun SlideInHost(
     visible: Boolean,
     modifier: Modifier = Modifier,
+    /** 外部进度（预见式返回手势直接写它）。不传则内部自建一份 */
+    slideProgress: SlideProgress = rememberSlideProgress(visible),
     baseContent: @Composable () -> Unit,
     overlayContent: @Composable () -> Unit,
 ) {
-    // 0 = 完全在下层，1 = 完全盖住。初值按首次组合时的可见性给，避免进场时先闪一下
-    val progress = remember { Animatable(if (visible) 1f else 0f) }
+    val progress = slideProgress
     var mounted by remember { mutableStateOf(visible) }
     val cornerRadius = rememberScreenCornerRadius()
 
     LaunchedEffect(visible) {
         if (visible) {
             mounted = true
-            progress.animateTo(
+            progress.animatable.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(SLIDE_IN_MS, easing = OobeQuartOutSoftStartEasing),
             )
         } else if (mounted) {
-            progress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(SLIDE_OUT_MS, easing = SecondaryPageExitEasing),
-            )
+            // 退出：无论当前被手势拖到哪，都从**当前位置**续播到 0。
+            // 以前这里和 PredictiveBackBox 各写一个位移，松手瞬间两边目标不同 → 闪一下
+            progress.animateTo(0f, SLIDE_OUT_MS)
             mounted = false
         }
     }
@@ -141,8 +141,12 @@ fun SlideInHost(
 /** 入场时长（NexioSchedule: NAV_ENTER_DURATION） */
 internal const val SLIDE_IN_MS = 600
 
-/** 出场时长（NexioSchedule: NAV_EXIT_DURATION） */
-internal const val SLIDE_OUT_MS = 320
+/**
+ * 出场时长。NexioSchedule 是 320ms，但那是**手势已经拖走大半**时才播的剩余段；
+ * 我们是"点返回 / 手势刚起步就松手"，整段从 1 播到 0，320ms 会显得唰一下就没了。
+ * 放大到 400ms，起点速度更缓，尾巴更从容。
+ */
+internal const val SLIDE_OUT_MS = 400
 
 /**
  * 侧滑载入的进/出场动画（给还在用 `AnimatedVisibility` 的宿主）。
@@ -172,7 +176,7 @@ private const val SLIDE_DIM = 0.42f
  * 读不到（直角屏 / 老系统 / 分屏）就返回 0，调用方跳过裁剪。
  */
 @Composable
-private fun rememberScreenCornerRadius(): Dp {
+internal fun rememberScreenCornerRadius(): Dp {
     val context = LocalContext.current
     val density = LocalDensity.current
     return remember(context, density) {
@@ -186,4 +190,11 @@ private fun rememberScreenCornerRadius(): Dp {
             with(density) { px.toDp() }
         }.getOrDefault(0.dp)
     }
+}
+
+/** 屏幕物理圆角的形状版本（预见式返回转场中裁页面用）；读不到返回 null */
+@Composable
+internal fun rememberScreenCornerShape(): RoundedCornerShape? {
+    val radius = rememberScreenCornerRadius()
+    return if (radius > 0.dp) RoundedCornerShape(radius) else null
 }
