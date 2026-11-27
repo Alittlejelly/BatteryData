@@ -109,8 +109,12 @@ object ChargeRecorder {
         if (_state.value is RecorderState.Idle) restore()
         val ctx = appContext ?: return
         // 自动充电记录：没在记、当前正充电时自动开一段（覆盖进程重启 / 开机场景）
+        // 不要回调 onAutoRecordSettingChanged：它会调用 ensure，形成无限递归。
         if (_state.value is RecorderState.Idle && BatterySettings(ctx).autoRecordEnabled()) {
-            onAutoRecordSettingChanged(ctx, true)
+            val sample = BatteryRepository(ctx).snapshot()
+            if (sample.isCharging && !sample.isFull) {
+                beginRecording(sample, recordType = "charge")
+            }
         }
         val islandKeepAlive = _state.value is RecorderState.Idle && run {
             val sample = BatteryRepository(ctx).snapshot()
